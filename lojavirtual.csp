@@ -3,34 +3,41 @@ channel autenticaUsuario:{0}.{0}
 channel adicionaCarrinho:{0}
 channel acessaProduto:{0}
 channel loginFalhou:{0..2}
-channel acessoCliente, pesquisaProduto, confereItens, finalizaCompra, continuarComprando, confirmaEndereco, escolherFormaPagamento, confirmaPagamento
+channel acessoCliente:{1..2}
+channel pesquisaProduto, confereItens, finalizaCompra, continuarComprando, confirmaEndereco, escolherFormaPagamento, confirmaPagamento
 channel calcularFrete, concluirCompra, loginOk, cadastrarNovoUsuario
 
-LOJAVIRTUAL = acessoCliente -> NAVEGACAO(<>)
+acessosSimultaneos = {1..2}
 
-NAVEGACAO(c) = pesquisaProduto -> acessaProduto?item -> DETALHEPRODUTO(item, c)
+LOJAVIRTUAL = ||| i:acessosSimultaneos @ ACESSOCLIENTE(i)
 
-DETALHEPRODUTO(item, c) = adicionaCarrinho!item -> CARRINHO(<item>^c)
+ACESSOCLIENTE(i) = acessoCliente.i -> NAVEGACAO(i, <>)
 
-CARRINHO(c) = (calcularFrete -> CARRINHO(c))
+NAVEGACAO(i, c) = pesquisaProduto -> acessaProduto?item -> DETALHEPRODUTO(i, item, c)
+
+DETALHEPRODUTO(i, item, c) = adicionaCarrinho!item -> CARRINHO(i, <item>^c)
+
+CARRINHO(i, c) = (calcularFrete -> CARRINHO(i, c))
 				[]
-		      (concluirCompra -> AUTENTICACAO(c, 0))
+		      (concluirCompra -> AUTENTICACAO(i, c, 0))
 		  		[]
 		  	  (if length(c) < 2 then 
-		  	  	continuarComprando -> NAVEGACAO(c) 
+		  	  	continuarComprando -> NAVEGACAO(i, c) 
 		  	  	else 
-		  	  		concluirCompra -> AUTENTICACAO(c, 0))
+		  	  		concluirCompra -> AUTENTICACAO(i, c, 0))
 
-AUTENTICACAO(c, n) = CADASTRONOVOUSUARIO(c,n)
+AUTENTICACAO(i, c, n) = CADASTRONOVOUSUARIO(i,c,n)
 					[]
 		     	  autenticaUsuario?login.senha -> 
-					((loginOk -> PAGAMENTO)
+					((loginOk -> PAGAMENTO(i))
 					  |~|
 					(loginFalhou!n+1 -> 
 							if(n+1 < 2) then 
-								AUTENTICACAO(c, n+1) 
+								AUTENTICACAO(i, c, n+1) 
 							else
-								LOJAVIRTUAL))
+								ACESSOCLIENTE(i)))
 
-PAGAMENTO = escolherFormaPagamento -> LOJAVIRTUAL
-CADASTRONOVOUSUARIO(c,n) = cadastrarNovoUsuario -> AUTENTICACAO(c,n)
+PAGAMENTO(i) = escolherFormaPagamento -> ACESSOCLIENTE(i)
+CADASTRONOVOUSUARIO(i,c,n) = cadastrarNovoUsuario -> AUTENTICACAO(i,c,n)
+
+assert LOJAVIRTUAL :[deadlock free[F]]
