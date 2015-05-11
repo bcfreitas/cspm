@@ -1,0 +1,36 @@
+--site de comercio eletronico
+channel autenticaUsuario:{0}.{0}
+channel adicionaCarrinho:{0}
+channel acessaProduto:{0}
+channel loginFalhou:{0..2}
+channel acessoCliente, pesquisaProduto, confereItens, finalizaCompra, continuarComprando, confirmaEndereco, escolherFormaPagamento, confirmaPagamento
+channel calcularFrete, concluirCompra, loginOk, cadastrarNovoUsuario
+
+LOJAVIRTUAL = acessoCliente -> NAVEGACAO(<>)
+
+NAVEGACAO(c) = pesquisaProduto -> acessaProduto?item -> DETALHEPRODUTO(item, c)
+
+DETALHEPRODUTO(item, c) = adicionaCarrinho!item -> CARRINHO(<item>^c)
+
+CARRINHO(c) = (calcularFrete -> CARRINHO(c))
+				[]
+		      (concluirCompra -> AUTENTICACAO(c, 0))
+		  		[]
+		  	  (if length(c) < 2 then 
+		  	  	continuarComprando -> NAVEGACAO(c) 
+		  	  	else 
+		  	  		concluirCompra -> AUTENTICACAO(c, 0))
+
+AUTENTICACAO(c, n) = CADASTRONOVOUSUARIO(c,n)
+					[]
+		     	  autenticaUsuario?login.senha -> 
+					((loginOk -> PAGAMENTO)
+					  |~|
+					(loginFalhou!n+1 -> 
+							if(n+1 < 2) then 
+								AUTENTICACAO(c, n+1) 
+							else
+								LOJAVIRTUAL))
+
+PAGAMENTO = escolherFormaPagamento -> LOJAVIRTUAL
+CADASTRONOVOUSUARIO(c,n) = cadastrarNovoUsuario -> AUTENTICACAO(c,n)
