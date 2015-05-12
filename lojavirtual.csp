@@ -1,4 +1,5 @@
 --Loja Virtual
+
 datatype produto = Smartphone | TV
 produtos = {(Smartphone, 450, 3), (TV, 870, 2)}
 
@@ -16,57 +17,68 @@ channel confirmaEndereco:{1.2}
 channel escolherFormaPagamento:{1..2}
 channel confirmaPagamento:{1..2}
 channel calcularFrete:{1..2}
-channel concluirCompra:{1..2}
+channel concluirCompra:{1..2}.{450, 870, 900, 1320, 1740}
 channel loginOk:{1..2} 
 channel cadastrarNovoUsuario:{1..2}
 channel exibeInfoProduto:{1..2}.{450,870}
 channel removerItem:produtos
 channel carrinhoVazio:{1..2}
+channel pagamentoBoleto
+channel pagamentoDebitoOnline
+channel pagamentoCartaoCredito
 
-item = (TV, 870,2)
 acessosSimultaneos = {1..2}
 
--- Entrelaçamento
+-- Entrelaçamento de acessos
 LOJAVIRTUAL = ||| i:acessosSimultaneos @ ACESSOCLIENTE(i)
 
+--i=id acesso
 ACESSOCLIENTE(i) = acessoCliente.i -> NAVEGACAO(i, <>)
 
+--i=id acesso; c=carrinho
 NAVEGACAO(i, c) = pesquisaProduto.i -> acessaProduto.i?item -> DETALHEPRODUTO(i, item, c)
 
 -- Let .. Within
 DETALHEPRODUTO(i, item, c) = let 
-								preco = funPreco(item) 
+								preco = fnPreco(item) 
 							 within
 							 	exibeInfoProduto.i.preco -> adicionaCarrinho.i!item -> CARRINHO(i, <item>^c)
 
 -- Comprehension
-funPreco(item) = head( seq({preco | (nome, preco, estoque) <- {item} }) )
+fnPreco(item) = head( seq({preco | (nome, preco, estoque) <- {item} }) )
 
+--i=id acesso; c=carrinho
 CARRINHO(i, c) = 	if length(c) == 0 then
 						carrinhoVazio.i -> NAVEGACAO(i,c)
 					---limite de 2 itens por carrinho (para evitar recursão infinita)
 					else if length(c) < 2 and length(c)>0 then 
 		  	  			(continuarComprando.i -> NAVEGACAO(i, c)
 		  	  				[]
-		  	  			concluirCompra.i -> AUTENTICACAO(i, c, 0)
+		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem?iOut:set(c) -> CARRINHO(i, funRemoveItem(iOut, c, <>)))
-		  	  		-- Carrinho atingiu limite de itens
+		  	  			removerItem?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>)))
+		  	  		-- Carrinho atingiu limite de itens (não pode continuar comprando)
 		  	  		else 
-		  	  			concluirCompra.i -> AUTENTICACAO(i, c, 0)
+		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem?iOut:set(c) -> CARRINHO(i, funRemoveItem(iOut, c, <>))
+		  	  			removerItem?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>))
 
-funRemoveItem(iOut, c, checked) = 	let 
+--iOut=item a remover; c=carrinho; checked=lista de itens ja comparados
+fnRemoveItem(iOut, c, checked) = 	let 
 										item = head(c)
 						 			within 
 						 				if (item == iOut) then
 						 					tail(c) ^ checked
 						 				else
-					 						funRemoveItem(iOut, tail(c), checked ^ <item>)
+					 						fnRemoveItem(iOut, tail(c), checked ^ <item>)
 
+fnTotalCarrinho(c, t) = if length(c) > 0 then
+							fnTotalCarrinho(tail(c), t + fnPreco( head(c)) )
+						 else 
+						 	t
+-- i=id acesso; c=carrinho; n=tentativas de login.
 AUTENTICACAO(i, c, n) = CADASTRONOVOUSUARIO(i,c,n)
 					[]
 		     	  autenticaUsuario.i?login.senha -> 
@@ -78,15 +90,34 @@ AUTENTICACAO(i, c, n) = CADASTRONOVOUSUARIO(i,c,n)
 							else
 								ACESSOCLIENTE(i)))
 
-PAGAMENTO(i,c) = escolherFormaPagamento.i -> ACESSOCLIENTE(i)
+PAGAMENTO(i,c) = escolherFormaPagamento.i -> 
+					(
+						pagamentoBoleto -> ACESSOCLIENTE(i)
+						[]
+						pagamentoDebitoOnline -> ACESSOCLIENTE(i)
+						[]
+						pagamentoCartaoCredito -> ACESSOCLIENTE(i)
+					)
+					
 CADASTRONOVOUSUARIO(i,c,n) = cadastrarNovoUsuario.i -> AUTENTICACAO(i,c,n)
 
 assert LOJAVIRTUAL :[deadlock free[F]] -- PASSED
+assert LOJAVIRTUAL :[deterministic [F]] -- FAIL
+assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 
 
 --TODO versão normal: 
---acrescentar valor.
---acrescentar paralelismo sincronizado com cliente ou operadora de cartão de crédito.
+--acrescentar valor. 
+--controle de estoque (concorrencia por recursos)
+--acrescentar paralelismo sincronizado com cliente e/ou operadora de cartão de crédito.
+--frete?
+
 --
 --TODO versão refinada: 
 --retirar não determinismo do login
+
+-- BANCO = transacaoBoleto -> transfereSaldo -> confirmaTransacao
+-- 		[]
+-- 		transacaoDebitoOnline -> verificaSaldo -> debitaConta -> creditaConta -> confirmaTransacao
+
+-- OPERADORACARTAO = transacaoCartao -> checaDadosUsuario -> checaCreditoCliente -> autorizaPagamento
