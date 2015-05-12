@@ -21,6 +21,7 @@ channel loginOk:{1..2}
 channel cadastrarNovoUsuario:{1..2}
 channel exibeInfoProduto:{1..2}.{450,870}
 channel removerItem:produtos
+channel carrinhoVazio:{1..2}
 
 item = (TV, 870,2)
 acessosSimultaneos = {1..2}
@@ -41,25 +42,30 @@ DETALHEPRODUTO(i, item, c) = let
 -- Comprehension
 funPreco(item) = head( seq({preco | (nome, preco, estoque) <- {item} }) )
 
-CARRINHO(i, c) = (calcularFrete.i -> CARRINHO(i, c))
-					[]
-		  	  	---limite de 2 itens por carrinho (para evitar recursão infinita)
-		  	  	(if length(c) < 2 then 
-		  	  		(continuarComprando.i -> NAVEGACAO(i, c)
-		  	  			[]
-		  	  		concluirCompra.i -> AUTENTICACAO(i, c, 0)
-		  	  			[]
-		  	  		removerItem?iOut:set(c) -> CARRINHO(i, funRemoveItem(iOut, c)))
+CARRINHO(i, c) = 	if length(c) == 0 then
+						carrinhoVazio.i -> NAVEGACAO(i,c)
+					---limite de 2 itens por carrinho (para evitar recursão infinita)
+					else if length(c) < 2 and length(c)>0 then 
+		  	  			(continuarComprando.i -> NAVEGACAO(i, c)
+		  	  				[]
+		  	  			concluirCompra.i -> AUTENTICACAO(i, c, 0)
+		  	  				[]
+		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
+		  	  			removerItem?iOut:set(c) -> CARRINHO(i, funRemoveItem(iOut, c, <>)))
+		  	  		-- Carrinho atingiu limite de itens
 		  	  		else 
-		  	  		concluirCompra.i -> AUTENTICACAO(i, c, 0))
+		  	  			concluirCompra.i -> AUTENTICACAO(i, c, 0)
+		  	  				[]
+		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
+		  	  			removerItem?iOut:set(c) -> CARRINHO(i, funRemoveItem(iOut, c, <>))
 
-funRemoveItem(iOut, c) = 	let 
-								item = head(c)
-						 	within 
-						 		if (item == iOut) then
-						 			tail(c)
-						 			else
-					 				funRemoveItem(iOut, tail(c))
+funRemoveItem(iOut, c, checked) = 	let 
+										item = head(c)
+						 			within 
+						 				if (item == iOut) then
+						 					tail(c) ^ checked
+						 				else
+					 						funRemoveItem(iOut, tail(c), checked ^ <item>)
 
 AUTENTICACAO(i, c, n) = CADASTRONOVOUSUARIO(i,c,n)
 					[]
