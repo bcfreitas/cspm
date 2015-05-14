@@ -28,18 +28,22 @@ channel carrinhoVazio:{1..2}
 channel pagamentoBoleto
 channel pagamentoDebitoOnline:{450, 870, 900, 1320, 1740}
 channel transacaoDebitoOnline:{450, 870, 900, 1320, 1740}
-channel pagamentoCartaoCredito
+channel pagamentoCartaoCredito:{450, 870, 900, 1320, 1740}
 channel confirmaTransacao
 channel negaTransacao
 channel pagamentoFalha
 channel enviaProdutos
 channel handshakeBanco:{450, 870, 900, 1320, 1740}
 channel aguardaResposta
+channel transacaoCredito
+channel handshakeOperadora:{450, 870, 900, 1320, 1740}.{Joao, Maria}.{1111111,2222222}.{11,22}
+channel informaDadosCartao:{Joao, Maria}.{1111111,2222222}.{11,22}
+channel eventoInternoOperadora
 
 acessosSimultaneos = {1..2}
 
 -- Entrelaçamento de acessos
-LOJAVIRTUAL = ||| i:acessosSimultaneos @ ACESSOCLIENTE(i)
+LOJAVIRTUAL =  ||| i:acessosSimultaneos @ ACESSOCLIENTE(i)
 
 --i=id acesso
 ACESSOCLIENTE(i) = acessoCliente.i -> NAVEGACAO(i, <>)
@@ -99,12 +103,21 @@ AUTENTICACAO(i, c, n) = autenticaUsuario.i?login.senha ->
 									ACESSOCLIENTE(i)))
 
 PAGAMENTO(i,c) = let total = fnTotalCarrinho(c,0) within
-						escolherFormaPagamento.i.total -> 
+						escolherFormaPagamento.i.total ->
+						( 
 							(pagamentoDebitoOnline.total -> 
 											-- Composição paralela generalizada
-											PAGAMENTODEBITOONLINE(i,c,total) 
+											( PAGAMENTODEBITOONLINE(i,c,total) 
 												[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacao, negaTransacao|} |] 
-											BANCO)
+													BANCO ))
+								[]
+							(pagamentoCartaoCredito.total ->	
+											( PAGAMENTOCREDITO(i, c, total)
+												[| {|handshakeOperadora, transacaoCredito, confirmaTransacao, negaTransacao|} |] 
+													OPERADORACARTAO
+												))
+						)
+							
 
 PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco.total -> transacaoDebitoOnline.total -> aguardaResposta ->
 														(
@@ -113,15 +126,30 @@ PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco.total -> transacaoDebitoOnline
 															(negaTransacao -> PAGAMENTO(i,c))
 														)
 
+PAGAMENTOCREDITO(i, c, total) = informaDadosCartao?nomegrafado?cartao?codigo -> 
+									handshakeOperadora.total.nomegrafado.cartao.codigo -> aguardaResposta ->
+														(
+															(confirmaTransacao -> enviaProdutos -> ACESSOCLIENTE(i))
+															[]
+															(negaTransacao -> PAGAMENTO(i,c))
+														)								
+
 channel eventoInternoBanco
 
 BANCO = handshakeBanco?total ->
 					(transacaoDebitoOnline.total -> eventoInternoBanco -> 
 															(
-																(confirmaTransacao -> BANCO)
+																(confirmaTransacao -> SKIP)
 																	[]
-																(negaTransacao -> BANCO)
+																(negaTransacao -> SKIP)
 															))
+
+OPERADORACARTAO = handshakeOperadora?total?nomegrafado?cartao?codigo -> eventoInternoOperadora ->
+															(
+																(confirmaTransacao -> SKIP)
+																	[]
+																(negaTransacao -> SKIP)
+															)
 			
 
 
@@ -141,6 +169,7 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 --retirar não determinismo do login
 --acrescentar possibilidade de cadastro de novo usuário e usar hiding para comparar
 -- CADASTRONOVOUSUARIO(i,c,n) = cadastrarNovoUsuario.i -> AUTENTICACAO(i,c,n)
+-- retirar o paralelismo generalizado entre PAGAMENTO e BANCO, e colocar em ACESSOS / BANCO para retirar o deadlock do skip.
 
 -- BANCO = --transacaoBoleto -> transfereSaldo -> confirmaTransacao
 -- -- 		--[]
