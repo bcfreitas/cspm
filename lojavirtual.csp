@@ -24,42 +24,42 @@ channel concluirCompra:{1..2}.{450, 870, 900, 1320, 1740}
 channel loginOk:{1..2} 
 channel cadastrarNovoUsuario:{1..2}
 channel exibeInfoProduto:{1..2}.{450,870}
-channel removerItem:produtos
+channel removerItem:{1..2}.produtos
 channel carrinhoVazio:{1..2}
-channel pagamentoBoleto
-channel pagamentoDebitoOnline:{450, 870, 900, 1320, 1740}
-channel transacaoDebitoOnline:{450, 870, 900, 1320, 1740}
-channel pagamentoCartaoCredito:{450, 870, 900, 1320, 1740}
-channel confirmaTransacao
-channel negaTransacao
-channel pagamentoFalha
-channel enviaProdutos
-channel handshakeBanco:{450, 870, 900, 1320, 1740}
-channel aguardaResposta
-channel transacaoCredito
-channel handshakeOperadora:{450, 870, 900, 1320, 1740}.{Joao, Maria}.{1111111,2222222}.{11,22}
-channel informaDadosCartao:{Joao, Maria}.{1111111,2222222}.{11,22}
-channel eventoInternoOperadora
-channel eventoInternoBanco
-channel consultaEstoque:produtos
-channel confirmaEstoque:Bool
-channel separaEstoque
+channel pagamentoBoleto:{1..2}
+channel pagamentoDebitoOnline:{1..2}.{450, 870, 900, 1320, 1740}
+channel transacaoDebitoOnline:{1..2}.{450, 870, 900, 1320, 1740}
+channel pagamentoCartaoCredito:{1..2}.{450, 870, 900, 1320, 1740}
+channel confirmaTransacaoCredito:{1..2}
+channel negaTransacaoCredito:{1..2}
+channel confirmaTransacaoDebito:{1..2}
+channel negaTransacaoDebito:{1..2}
+channel pagamentoFalha:{1..2}
+channel enviaProdutos:{1..2}
+channel handshakeBanco:{1..2}.{450, 870, 900, 1320, 1740}
+channel aguardaResposta:{1..2}
+channel transacaoCredito:{1..2}
+channel handshakeOperadora:{1..2}.{450, 870, 900, 1320, 1740}.{Joao, Maria}.{1111111,2222222}.{11,22}
+channel informaDadosCartao:{1..2}.{Joao, Maria}.{1111111,2222222}.{11,22}
+channel eventoInternoOperadora:{1..2}
+channel eventoInternoBanco:{1..2}
+channel consultaEstoque:{1..2}.produtos
+channel confirmaEstoque:{1..2}.Bool
+channel separaEstoque:{1..2}
 channel mensagemEstoqueIndisponivel:{1..2}
-channel respostaBD:Bool 
-channel BDesperaConfirmacao
+channel respostaBD:{1..2}.Bool 
+channel BDesperaConfirmacao:{1..2}
 
 acessosSimultaneos = {1..2}
 
 LOJAVIRTUAL = LOJAVIRTUAL2(produtos)
 
--- Entrelaçamento de acessos
+-- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
 LOJAVIRTUAL2(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTE(i, produtosLoja))
 												[| {|confirmaEstoque, separaEstoque, respostaBD|} |]
-													BDLOJA(produtosLoja)
+																	BDLOJA(produtosLoja)
 
-BDLOJA(produtosLoja) = 	((confirmaEstoque!true -> BDLOJA(produtosLoja))
-													[]
-												(separaEstoque -> respostaBD!true -> BDesperaConfirmacao  -> BDLOJA(produtosLoja)))
+BDLOJA(produtosLoja) = 	(separaEstoque?i -> respostaBD!i.true -> BDLOJA(produtosLoja))
 
 --i=id acesso
 ACESSOCLIENTE(i, produtosLoja) = acessoCliente.i -> NAVEGACAO(i, <>, produtosLoja)
@@ -86,13 +86,13 @@ CARRINHO(i, c, produtosLoja) = 	if length(c) == 0 then
 		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0, produtosLoja)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>), produtosLoja))
+		  	  			removerItem!i?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>), produtosLoja))
 		  	  		-- Carrinho atingiu limite de itens (não pode continuar comprando)
 		  	  		else 
 		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0, produtosLoja)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>), produtosLoja)
+		  	  			removerItem!i?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>), produtosLoja)
 
 --iOut=item a remover; c=carrinho; checked=lista de itens ja comparados
 fnRemoveItem(iOut, c, checked) = 	let 
@@ -110,7 +110,15 @@ fnTotalCarrinho(c, t) = if length(c) > 0 then
 
 -- i=id acesso; c=carrinho; n=tentativas de login.
 AUTENTICACAO(i, c, n, produtosLoja) = autenticaUsuario.i?login.senha -> 
-							((loginOk.i -> PAGAMENTO(i,c,produtosLoja))
+							((loginOk.i -> 
+
+									( (PAGAMENTO(i,c,produtosLoja)
+										[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
+												BANCO ) 
+
+									) [| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
+																		OPERADORACARTAO
+							) 
 					  			|~|
 							(loginFalhou.i!n+1 -> 
 								if(n+1 < 2) then 
@@ -123,51 +131,45 @@ PAGAMENTO(i,c,produtosLoja) = 	let
 								within
 									escolherFormaPagamento.i.total -> 
 										--eventos sincronizados com BDLOJA (ver composição paralela ACESSOCLIENTE/BDLOJA)
-										separaEstoque -> respostaBD?retorno ->
+										separaEstoque!i -> respostaBD!i?retorno ->
 										if (retorno == true) then
 											( 
-												(pagamentoDebitoOnline.total -> 
+												(pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total,produtosLoja) )
 																-- Composição paralela generalizada
-																( PAGAMENTODEBITOONLINE(i,c,total,produtosLoja) 
-																	[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacao, 
-																		negaTransacao|} |] 
-																	BANCO ))
 													[]
-												(pagamentoCartaoCredito.total ->	
-																( PAGAMENTOCREDITO(i, c, total, produtosLoja)
-																	[| {|handshakeOperadora, transacaoCredito, confirmaTransacao, negaTransacao|} |] 
-																		OPERADORACARTAO
-																	))
+												(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITO(i, c, total, produtosLoja) )	
 											)
 										else
-											mensagemEstoqueIndisponivel.i -> ACESSOCLIENTE(i,produtosLoja)
+											mensagemEstoqueIndisponivel.i -> STOP
 
-PAGAMENTODEBITOONLINE(i,c,total,produtosLoja) = handshakeBanco.total -> transacaoDebitoOnline.total -> aguardaResposta ->
-																	((confirmaTransacao -> enviaProdutos -> ACESSOCLIENTE(i,produtosLoja))
-																	[]
-																	(negaTransacao -> PAGAMENTO(i,c,produtosLoja)))
+PAGAMENTODEBITOONLINE(i,c,total,produtosLoja) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
+																	( 
+																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> SKIP)
+																			[]
+																		(negaTransacaoDebito.i -> PAGAMENTO(i,c,produtosLoja))
+																	)
 																
-PAGAMENTOCREDITO(i, c, total,produtosLoja) = informaDadosCartao?nomegrafado?cartao?codigo -> 
-									handshakeOperadora.total.nomegrafado.cartao.codigo -> aguardaResposta ->
+PAGAMENTOCREDITO(i, c, total,produtosLoja) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
+									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> aguardaResposta.i ->
 														(
-															(confirmaTransacao -> enviaProdutos -> ACESSOCLIENTE(i,produtosLoja))
+															(confirmaTransacaoCredito!i -> enviaProdutos!i -> SKIP)
 															[]
-															(negaTransacao -> PAGAMENTO(i,c,produtosLoja))
+															(negaTransacaoCredito!i -> PAGAMENTO(i,c,produtosLoja))
 														)								
 
-BANCO = handshakeBanco?total ->
-					(transacaoDebitoOnline.total -> eventoInternoBanco -> 
+BANCO = handshakeBanco?i?total ->
+					(transacaoDebitoOnline!i.total -> eventoInternoBanco!i -> 
 															(
-																(confirmaTransacao -> SKIP)
+																(confirmaTransacaoDebito!i -> SKIP)
 																	[]
-																(negaTransacao -> SKIP)
+																(negaTransacaoDebito!i -> SKIP)
 															))
 
-OPERADORACARTAO = handshakeOperadora?total?nomegrafado?cartao?codigo -> eventoInternoOperadora ->
+OPERADORACARTAO = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
 															(
-																(confirmaTransacao -> SKIP)
+																(confirmaTransacaoCredito!i -> SKIP)
 																	[]
-																(negaTransacao -> SKIP)
+																(negaTransacaoCredito!i -> SKIP)
 															)
 			
 
