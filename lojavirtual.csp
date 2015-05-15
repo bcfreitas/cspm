@@ -2,9 +2,9 @@
 
 datatype produto = Smartphone | TV
 datatype pessoas = Joao | Maria
-produtos = {(Smartphone, 450, 3), (TV, 870, 2)}
+produtos = {Smartphone, TV}
+produtosBD = {(Smartphone, 450, 3), (TV, 870, 2)}
 usuarios = {(Joao, 123), (Maria, 345)}
-teste = <1,2>
 
 --O primeiro parâmetro de todos os canais é a identificação do acesso: 1 ou 2.
 channel autenticaUsuario:{1..2}.{Joao, Maria}.{123, 456}
@@ -49,50 +49,82 @@ channel separaEstoque:{1..2}
 channel mensagemEstoqueIndisponivel:{1..2}
 channel respostaBD:{1..2}.Bool 
 channel BDesperaConfirmacao:{1..2}
+channel consultaProdutoBD:{1..2}.produtos
+channel respostaProdutoBD:{1..2}.produtos.{450, 870, 900, 1320, 1740}.{0..9}
 
 acessosSimultaneos = {1..2}
 
-LOJAVIRTUAL = LOJAVIRTUAL2(produtos)
+LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
-LOJAVIRTUAL2(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTE(i, produtosLoja))
-												[| {|confirmaEstoque, separaEstoque, respostaBD|} |]
+LOJAVIRTUAL2(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
+												[| {|confirmaEstoque, separaEstoque, respostaBD, consultaProdutoBD, respostaProdutoBD|} |]
 																	BDLOJA(produtosLoja)
 
 BDLOJA(produtosLoja) = 	(separaEstoque?i -> respostaBD!i.true -> BDLOJA(produtosLoja))
+							[]
+						(consultaProdutoBD?i?item -> CONSULTABD(i, produtosLoja, item))
+
+CONSULTABD(i, produtosLoja, item) = 	let 
+										preco = fnPreco(produtosLoja, item)
+	 									estoque = fnEstoque(produtosLoja, item) 
+	 								within
+	 									respostaProdutoBD!i.item.preco.estoque -> BDLOJA(produtosLoja)
 
 --i=id acesso
-ACESSOCLIENTE(i, produtosLoja) = acessoCliente.i -> NAVEGACAO(i, <>, produtosLoja)
+ACESSOCLIENTE(i) = acessoCliente.i -> NAVEGACAO(i, <>)
 
 --i=id acesso; c=carrinho
-NAVEGACAO(i, c, produtosLoja) = pesquisaProduto.i -> acessaProduto.i?item -> DETALHEPRODUTO(i, item, c, produtosLoja)
+NAVEGACAO(i, c) = pesquisaProduto.i -> acessaProduto.i?item -> DETALHEPRODUTO(i, item, c)
+
+DETALHEPRODUTO(i, item, c) = consultaProdutoBD!i.item -> respostaProdutoBD!i?preco?estoque -> 
+															adicionaCarrinho.i.item -> CARRINHO(i, <(item,preco,1)>^c)
 
 -- Let .. Within
-DETALHEPRODUTO(i, item, c, produtosLoja) = let 
-								preco = fnPreco(item) 
-							 within
-							 	exibeInfoProduto.i.preco -> adicionaCarrinho.i!item -> CARRINHO(i, <item>^c, produtosLoja)
+-- DETALHEPRODUTO(i, item, c) = let 
+-- 								preco = fnPreco(item)
+-- 								estoque = fnEstoque(item) 
+-- 							 within
+-- 							 	exibeInfoProduto.i.preco.estoque -> adicionaCarrinho.i!item -> CARRINHO(i, <item>^c)
 
 -- Comprehension
-fnPreco(item) = head( seq({preco | (nome, preco, estoque) <- {item} }) )
+fnPreco(produtosLoja, item) = 	let 
+									nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) ) 
+									preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) ) 
+								within
+									if nome == item then
+										preco
+									else
+										fnPreco(tail(produtosLoja), item)
+
+fnPreco2(item) = head( seq({preco | (nome, preco, estoque) <- {item} }) ) 
+
+fnEstoque(produtosLoja, item) = let 
+									nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) ) 
+									estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) ) 
+								within
+									if nome == item then
+										estoque
+									else
+										fnEstoque(tail(produtosLoja), item)
 
 --i=id acesso; c=carrinho
-CARRINHO(i, c, produtosLoja) = 	if length(c) == 0 then
-						carrinhoVazio.i -> NAVEGACAO(i,c,produtosLoja)
+CARRINHO(i, c) = 	if length(c) == 0 then
+						carrinhoVazio.i -> NAVEGACAO(i,c)
 					---limite de 2 itens por carrinho (para evitar recursão infinita)
 					else if length(c) < 2 and length(c)>0 then 
-		  	  			(continuarComprando.i -> NAVEGACAO(i, c, produtosLoja)
+		  	  			(continuarComprando.i -> NAVEGACAO(i, c)
 		  	  				[]
-		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0, produtosLoja)
+		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem!i?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>), produtosLoja))
+		  	  			removerItem!i?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>)))
 		  	  		-- Carrinho atingiu limite de itens (não pode continuar comprando)
 		  	  		else 
-		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0, produtosLoja)
+		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem!i?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>), produtosLoja)
+		  	  			removerItem!i?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>))
 
 --iOut=item a remover; c=carrinho; checked=lista de itens ja comparados
 fnRemoveItem(iOut, c, checked) = 	let 
@@ -104,15 +136,15 @@ fnRemoveItem(iOut, c, checked) = 	let
 					 						fnRemoveItem(iOut, tail(c), checked ^ <item>)
 
 fnTotalCarrinho(c, t) = if length(c) > 0 then
-							fnTotalCarrinho(tail(c), t + fnPreco( head(c)) )
+							fnTotalCarrinho(tail(c), t + fnPreco2( head(c)) )
 						 else 
 						 	t
 
 -- i=id acesso; c=carrinho; n=tentativas de login.
-AUTENTICACAO(i, c, n, produtosLoja) = autenticaUsuario.i?login.senha -> 
+AUTENTICACAO(i, c, n) = autenticaUsuario.i?login.senha -> 
 							((loginOk.i -> 
 
-									( (PAGAMENTO(i,c,produtosLoja)
+									( (PAGAMENTO(i,c)
 										[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
 												BANCO ) 
 
@@ -122,11 +154,11 @@ AUTENTICACAO(i, c, n, produtosLoja) = autenticaUsuario.i?login.senha ->
 					  			|~|
 							(loginFalhou.i!n+1 -> 
 								if(n+1 < 2) then 
-									AUTENTICACAO(i, c, n+1, produtosLoja) 
+									AUTENTICACAO(i, c, n+1) 
 								else
-									ACESSOCLIENTE(i, produtosLoja)))
+									ACESSOCLIENTE(i)))
 
-PAGAMENTO(i,c,produtosLoja) = 	let 
+PAGAMENTO(i,c) = 	let 
 									total = fnTotalCarrinho(c,0) 
 								within
 									escolherFormaPagamento.i.total -> 
@@ -134,27 +166,27 @@ PAGAMENTO(i,c,produtosLoja) = 	let
 										separaEstoque!i -> respostaBD!i?retorno ->
 										if (retorno == true) then
 											( 
-												(pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total,produtosLoja) )
+												(pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total) )
 																-- Composição paralela generalizada
 													[]
-												(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITO(i, c, total, produtosLoja) )	
+												(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITO(i, c, total) )	
 											)
 										else
 											mensagemEstoqueIndisponivel.i -> STOP
 
-PAGAMENTODEBITOONLINE(i,c,total,produtosLoja) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
+PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
 																	( 
 																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> SKIP)
 																			[]
-																		(negaTransacaoDebito.i -> PAGAMENTO(i,c,produtosLoja))
+																		(negaTransacaoDebito.i -> PAGAMENTO(i,c))
 																	)
 																
-PAGAMENTOCREDITO(i, c, total,produtosLoja) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
+PAGAMENTOCREDITO(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
 									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> aguardaResposta.i ->
 														(
 															(confirmaTransacaoCredito!i -> enviaProdutos!i -> SKIP)
 															[]
-															(negaTransacaoCredito!i -> PAGAMENTO(i,c,produtosLoja))
+															(negaTransacaoCredito!i -> PAGAMENTO(i,c))
 														)								
 
 BANCO = handshakeBanco?i?total ->
