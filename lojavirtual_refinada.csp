@@ -1,0 +1,265 @@
+--Loja Virtual refinada
+
+datatype produto = Smartphone | TV
+datatype pessoas = Joao | Maria
+produtos = {Smartphone, TV}
+produtosBD = {(Smartphone, 100, 2), (TV, 200, 1)}
+
+--os conjuntos abaixo foram criados para melhorar o desempenho do FDR
+totaisPossiveis = {100,200,300,400}
+precosUnitariosPossiveis = {100,200}
+
+usuarios = {(Joao, 123), (Maria, 345)}
+
+
+--{450, 870, 900, 1320, 1740}
+--O primeiro parâmetro de todos os canais é a identificação do acesso: 1 ou 2.
+channel autenticaUsuario:{1..2}.{Joao, Maria}.{123, 456}
+channel adicionaCarrinho:{1..2}.produtos
+channel acessaProduto:{1..2}.produtos
+channel loginFalhou:{1..2}.{0..2}
+channel acessoCliente:{1..2}
+channel pesquisaProduto:{1..2}
+channel confereItens:{1..2}
+channel finalizaCompra:{1..2}
+channel continuarComprando:{1..2}
+channel confirmaEndereco:{1.2}
+channel escolherFormaPagamento:{1..2}.totaisPossiveis
+channel confirmaPagamento:{1..2}
+channel calcularFrete:{1..2}
+channel concluirCompra:{1..2}.totaisPossiveis
+channel loginOk:{1..2} 
+channel cadastrarNovoUsuario:{1..2}
+channel exibeInfoProduto:{1..2}.{1..10}
+channel removerItem:{1..2}.produtos
+channel carrinhoVazio:{1..2}
+channel pagamentoBoleto:{1..2}
+channel pagamentoDebitoOnline:{1..2}.totaisPossiveis
+channel transacaoDebitoOnline:{1..2}.totaisPossiveis
+channel pagamentoCartaoCredito:{1..2}.totaisPossiveis
+channel confirmaTransacaoCredito:{1..2}
+channel negaTransacaoCredito:{1..2}
+channel confirmaTransacaoDebito:{1..2}
+channel negaTransacaoDebito:{1..2}
+channel pagamentoFalha:{1..2}
+channel enviaProdutos:{1..2}
+channel handshakeBanco:{1..2}.totaisPossiveis
+channel aguardaResposta:{1..2}
+channel transacaoCredito:{1..2}
+channel handshakeOperadora:{1..2}.totaisPossiveis.{Joao, Maria}.{1111111,2222222}.{11,22}
+channel informaDadosCartao:{1..2}.{Joao, Maria}.{1111111,2222222}.{11,22}
+channel eventoInternoOperadora:{1..2}
+channel eventoInternoBanco:{1..2}
+channel consultaEstoque:{1..2}.produtos
+channel separaEstoque:{1..2}.produtos
+channel reverteEstoque:{1..2}.produtos
+channel mensagemEstoqueIndisponivel:{1..2}.produtos
+channel respostaEstoqueBD:{1..2}.Bool.precosUnitariosPossiveis
+channel BDesperaConfirmacao:{1..2}
+channel consultaProdutoBD:{1..2}.produtos
+channel respostaProdutoBD:{1..2}.produtos.precosUnitariosPossiveis.{0..9}
+
+acessosSimultaneos = {1..2}
+
+
+LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
+
+-- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
+LOJAVIRTUAL2ref(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
+												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
+																	BDLOJAref(produtosLoja)
+
+BDLOJAref(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item))
+							[]
+						(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
+							[]
+						(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))
+
+
+CONSULTABDref(i, produtosLoja, item) = 	let 
+										preco = fnPreco(produtosLoja, item)
+	 									estoque = fnEstoque(produtosLoja, item) 
+	 								within
+	 									respostaProdutoBD!i.item.preco.estoque -> BDLOJAref(produtosLoja)
+
+SEPARAESTOQUEBDref(i, produtosLoja, item, checked) = 	let
+														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+													within
+														if nome == item then
+															if estoque > 0 then
+																respostaEstoqueBD!i.true.preco -> BDLOJAref(<(nome,preco,estoque-1)>^(tail(produtosLoja))^checked)
+															else
+																respostaEstoqueBD!i.false.preco -> BDLOJAref(produtosLoja^checked)
+														else
+															SEPARAESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+
+REVERTEESTOQUEBDref(i, produtosLoja, item, checked) = 	let
+														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+													within
+														if nome == item then
+															if estoque < 9 then
+																BDLOJAref(<(nome,preco,estoque+1)>^(tail(produtosLoja))^checked)
+															else
+																BDLOJAref(<(nome,preco,estoque)>^(tail(produtosLoja))^checked)
+														else
+															REVERTEESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+
+--i=id acesso
+ACESSOCLIENTEref(i) = acessoCliente.i -> NAVEGACAOref(i, <>)
+
+--i=id acesso; c=carrinho
+NAVEGACAOref(i, c) = pesquisaProduto.i -> acessaProduto.i?item ->  DETALHEPRODUTOref(i, item, c)
+
+-- ao visualizar o detalhe de um produto, o cliente pode adicionar ao carrinho, fazendo com que seja separado estoque no banco.
+DETALHEPRODUTOref(i, item, c) =	consultaProdutoBD!i!item -> respostaProdutoBD!i?item?preco?estoque ->
+														(if estoque > 0 then
+															(adicionaCarrinho.i.item -> 
+																(
+																--separaEstoque e RespostaEstoqueBD são sincronizados com BDLOJA
+																separaEstoque!i!item -> 
+																	respostaEstoqueBD!i?retorno?preco ->
+																				if retorno == true then
+																					--ao adicionar item no carrinho a quantidade padrão é 1
+																					CARRINHOref(i, <(item,preco,1)>^c)
+																				else
+																					mensagemEstoqueIndisponivel.i.item -> 
+																								NAVEGACAOref(i, c) 
+																)
+															)
+															else
+																mensagemEstoqueIndisponivel.i.item -> 
+																								NAVEGACAOref(i, c)
+														)
+															[]
+														NAVEGACAOref(i,c)
+
+-- Comprehension
+fnPreco(produtosLoja, item) = 	let 
+									nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) ) 
+									preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) ) 
+								within
+									if nome == item then
+										preco
+									else
+										fnPreco(tail(produtosLoja), item)
+
+fnPreco2(item) = head( seq({preco | (nome, preco, estoque) <- {item} }) ) 
+
+fnEstoque(produtosLoja, item) = let 
+									nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) ) 
+									estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) ) 
+								within
+									if nome == item then
+										estoque
+									else
+										fnEstoque(tail(produtosLoja), item)
+
+--i=id acesso; c=carrinho
+CARRINHOref(i, c) = 	if length(c) == 0 then
+						carrinhoVazio.i -> NAVEGACAOref(i,c)
+					---limite de 2 itens por carrinho (para evitar recursão infinita)
+					else if length(c) < 2 and length(c)>0 then 
+		  	  			(continuarComprando.i -> NAVEGACAOref(i, c)
+		  	  				[]
+		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAOref(i, c, 0)
+		  	  				[]
+		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
+		  	  			-- reverteEstoque é sincronizado com BDLOJA
+		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> reverteEstoque!i.iOut -> CARRINHOref(i, fnRemoveItem(iOut, c, <>)))
+		  	  		-- Carrinho atingiu limite de itens (não pode continuar comprando)
+		  	  		else 
+		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAOref(i, c, 0)
+		  	  				[]
+		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
+		  	  			-- reverteEstoque é sincronizado com BDLOJA
+		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> reverteEstoque!i.iOut -> CARRINHOref(i, fnRemoveItem(iOut, c, <>))
+
+--iOut=item a remover; c=carrinho; checked=lista de itens ja comparados
+fnRemoveItem(iOut, c, checked) = 	let 
+										item = head(c)
+										nome = head( seq({nome | (nome, preco, estoque) <- {item} }) )
+						 			within 
+						 				if (nome == iOut) then
+						 					tail(c) ^ checked
+						 				else
+					 						fnRemoveItem(iOut, tail(c), checked^<item>)
+
+fnTotalCarrinho(c, t) = if length(c) > 0 then
+							fnTotalCarrinho(tail(c), t + fnPreco2( head(c)) )
+						 else 
+						 	t
+
+fnIdItens(c,idItens) = 	let 
+							item = head(c)
+							nome = head( seq({nome | (nome, preco, estoque) <- {item} }) ) 
+						within
+							if length(c) > 0 then
+								fnIdItens(tail(c), idItens^<nome>)
+							else
+								set(idItens)
+
+-- i=id acesso; c=carrinho; n=tentativas de login.
+AUTENTICACAOref(i, c, n) = autenticaUsuario.i?login.senha -> 
+							((loginOk.i -> 
+
+									( (PAGAMENTOref(i,c)
+										[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
+												BANCOref ) 
+
+									) [| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
+																		OPERADORACARTAOref
+							) 
+					  			|~|
+							(loginFalhou.i!n+1 -> 
+								if(n+1 < 2) then 
+									AUTENTICACAOref(i, c, n+1) 
+								else
+									ACESSOCLIENTEref(i)))
+
+PAGAMENTOref(i,c) = 	let 
+									total = fnTotalCarrinho(c,0) 
+								within
+									escolherFormaPagamento.i.total -> 
+												((pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINEref(i,c,total))
+													[]
+												(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITOref(i, c, total)))	
+
+--eventos sincronizados com BANCO (ver composição paralela)
+PAGAMENTODEBITOONLINEref(i,c,total) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
+																	( 
+																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> SKIP)
+																			[]
+																		(negaTransacaoDebito.i -> PAGAMENTOref(i,c))
+																	)
+
+--eventos sincronizados com OPERADORACARTAO (ver composição paralela)																
+PAGAMENTOCREDITOref(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
+									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> aguardaResposta.i ->
+														(
+															(confirmaTransacaoCredito!i -> enviaProdutos!i -> SKIP)
+															[]
+															(negaTransacaoCredito!i -> PAGAMENTOref(i,c))
+														)								
+
+BANCOref = handshakeBanco?i?total ->
+					(transacaoDebitoOnline!i.total -> eventoInternoBanco!i -> 
+															(
+																(confirmaTransacaoDebito!i -> SKIP)
+																	[]
+																(negaTransacaoDebito!i -> SKIP)
+															))
+
+OPERADORACARTAOref = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
+															(
+																(confirmaTransacaoCredito!i -> SKIP)
+																	[]
+																(negaTransacaoCredito!i -> SKIP)
+															)
+
+assert LOJAVIRTUALref :[deadlock free[F]] -- PASSED
+assert LOJAVIRTUALref :[deterministic [F]] -- FAIL
+assert LOJAVIRTUALref :[divergence free [FD]] -- PASSED

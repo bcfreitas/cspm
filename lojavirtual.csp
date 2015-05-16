@@ -51,8 +51,8 @@ channel informaDadosCartao:{1..2}.{Joao, Maria}.{1111111,2222222}.{11,22}
 channel eventoInternoOperadora:{1..2}
 channel eventoInternoBanco:{1..2}
 channel consultaEstoque:{1..2}.produtos
-channel confirmaEstoque:{1..2}.Bool
 channel separaEstoque:{1..2}.produtos
+channel reverteEstoque:{1..2}.produtos
 channel mensagemEstoqueIndisponivel:{1..2}.produtos
 channel respostaEstoqueBD:{1..2}.Bool.precosUnitariosPossiveis
 channel BDesperaConfirmacao:{1..2}
@@ -65,12 +65,15 @@ LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
 LOJAVIRTUAL2(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
-												[| {|confirmaEstoque, separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD|} |]
+												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
 																	BDLOJA(produtosLoja)
 
-BDLOJA(produtosLoja) = 	(separaEstoque?i?item -> SEPARAESTOQUEBD(i, produtosLoja, item, <>))
+BDLOJA(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABD(i, produtosLoja, item))
 							[]
-						(consultaProdutoBD?i?item -> CONSULTABD(i, produtosLoja, item))
+						(separaEstoque?i?item -> SEPARAESTOQUEBD(i, produtosLoja, item, <>))
+							[]
+						(reverteEstoque?i?item -> REVERTEESTOQUEBD(i, produtosLoja, item, <>))
+
 
 CONSULTABD(i, produtosLoja, item) = 	let 
 										preco = fnPreco(produtosLoja, item)
@@ -91,23 +94,48 @@ SEPARAESTOQUEBD(i, produtosLoja, item, checked) = 	let
 														else
 															SEPARAESTOQUEBD(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
 
+REVERTEESTOQUEBD(i, produtosLoja, item, checked) = 	let
+														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+													within
+														if nome == item then
+															-- 9 é o limite máximo de estoque de itens, definido no canal respostaProdutoBD
+															if estoque < 9 then
+																BDLOJA(<(nome,preco,estoque+1)>^(tail(produtosLoja))^checked)
+															else
+																BDLOJA(<(nome,preco,estoque)>^(tail(produtosLoja))^checked)
+														else
+															REVERTEESTOQUEBD(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+
 --i=id acesso
 ACESSOCLIENTE(i) = acessoCliente.i -> NAVEGACAO(i, <>)
 
 --i=id acesso; c=carrinho
-NAVEGACAO(i, c) = pesquisaProduto.i -> acessaProduto.i?item -> DETALHEPRODUTO(i, item, c)
+NAVEGACAO(i, c) = pesquisaProduto.i -> acessaProduto.i?item ->  DETALHEPRODUTO(i, item, c)
 
 -- ao visualizar o detalhe de um produto, o cliente pode adicionar ao carrinho, fazendo com que seja separado estoque no banco.
-DETALHEPRODUTO(i, item, c) =	adicionaCarrinho.i.item -> 
-											separaEstoque!i!item -> 
-													--separaEstoque e RespostaEstoqueBD são sincronizados com BDLOJA
-													respostaEstoqueBD!i?retorno?preco ->
-																if retorno == true then
-																	--ao adicionar item no carrinho a quantidade padrão é 1
-																	CARRINHO(i, <(item,preco,1)>^c)
-																else
-																	mensagemEstoqueIndisponivel.i.item -> 
-																				NAVEGACAO(i, c)
+DETALHEPRODUTO(i, item, c) =	consultaProdutoBD!i!item -> respostaProdutoBD!i?item?preco?estoque ->
+														(if estoque > 0 then
+															(adicionaCarrinho.i.item -> 
+																(
+																--separaEstoque e RespostaEstoqueBD são sincronizados com BDLOJA
+																separaEstoque!i!item -> 
+																	respostaEstoqueBD!i?retorno?preco ->
+																				if retorno == true then
+																					--ao adicionar item no carrinho a quantidade padrão é 1
+																					CARRINHO(i, <(item,preco,1)>^c)
+																				else
+																					mensagemEstoqueIndisponivel.i.item -> 
+																								NAVEGACAO(i, c) 
+																)
+															)
+															else
+																mensagemEstoqueIndisponivel.i.item -> 
+																								NAVEGACAO(i, c)
+														)
+															[]
+														NAVEGACAO(i,c)
 
 -- Comprehension
 fnPreco(produtosLoja, item) = 	let 
@@ -140,13 +168,15 @@ CARRINHO(i, c) = 	if length(c) == 0 then
 		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> CARRINHO(i, fnRemoveItem(iOut, c, <>)))
+		  	  			-- reverteEstoque é sincronizado com BDLOJA
+		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> reverteEstoque!i.iOut -> CARRINHO(i, fnRemoveItem(iOut, c, <>)))
 		  	  		-- Carrinho atingiu limite de itens (não pode continuar comprando)
 		  	  		else 
 		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> CARRINHO(i, fnRemoveItem(iOut, c, <>))
+		  	  			-- reverteEstoque é sincronizado com BDLOJA
+		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> reverteEstoque!i.iOut -> CARRINHO(i, fnRemoveItem(iOut, c, <>))
 
 --iOut=item a remover; c=carrinho; checked=lista de itens ja comparados
 fnRemoveItem(iOut, c, checked) = 	let 
@@ -250,22 +280,167 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 -- CADASTRONOVOUSUARIO(i,c,n) = cadastrarNovoUsuario.i -> AUTENTICACAO(i,c,n)
 -- retirar o paralelismo generalizado entre PAGAMENTO e BANCO, e colocar em ACESSOS / BANCO para retirar o deadlock do skip.
 
--- BANCO = --transacaoBoleto -> transfereSaldo -> confirmaTransacao
--- -- 		--[]
---  		transacaoDebitoOnline.total.contaEmpresa -> 
---  						recebeDadosConta?cartao.senha ->
---  												(dadosContaOK -> verificaSaldo.conta -> 
---  																	(saldoOK -> debitaConta.conta -> creditaConta.contaEmpresa
---  																	 									-> confirmaTransacao -> BANCO)
---  																		[]
---  																	(saldoInsuficiente -> negaTransacao -> BANCO)
---  														[]
---  												(dadosContaInvalidos -> negaTransacao -> BANCO)
 
--- OPERADORACARTAO = transacaoCartao -> checaDadosUsuario -> checaCreditoCliente -> autorizaPagamento
+
+----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
+--------------------------------------------VERSÃO REFINADA-----------------------------------------------
+----------------------------------------------------------------------------------------------------------
+----------------------------------------------------------------------------------------------------------
 
 LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 
-LOJAVIRTUAL2ref(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
-												[| {|confirmaEstoque, separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD|} |]
-																	BDLOJA(produtosLoja)
+-- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
+LOJAVIRTUAL2ref(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
+												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
+																	BDLOJAref(produtosLoja)
+
+BDLOJAref(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item))
+							[]
+						(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
+							[]
+						(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))
+
+
+CONSULTABDref(i, produtosLoja, item) = 	let 
+										preco = fnPreco(produtosLoja, item)
+	 									estoque = fnEstoque(produtosLoja, item) 
+	 								within
+	 									respostaProdutoBD!i.item.preco.estoque -> BDLOJAref(produtosLoja)
+
+SEPARAESTOQUEBDref(i, produtosLoja, item, checked) = 	let
+														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+													within
+														if nome == item then
+															if estoque > 0 then
+																respostaEstoqueBD!i.true.preco -> BDLOJAref(<(nome,preco,estoque-1)>^(tail(produtosLoja))^checked)
+															else
+																respostaEstoqueBD!i.false.preco -> BDLOJAref(produtosLoja^checked)
+														else
+															SEPARAESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+
+REVERTEESTOQUEBDref(i, produtosLoja, item, checked) = 	let
+														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+													within
+														if nome == item then
+															if estoque < 9 then
+																BDLOJAref(<(nome,preco,estoque+1)>^(tail(produtosLoja))^checked)
+															else
+																BDLOJAref(<(nome,preco,estoque)>^(tail(produtosLoja))^checked)
+														else
+															REVERTEESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+
+--i=id acesso
+ACESSOCLIENTEref(i) = acessoCliente.i -> NAVEGACAOref(i, <>)
+
+--i=id acesso; c=carrinho
+NAVEGACAOref(i, c) = pesquisaProduto.i -> acessaProduto.i?item ->  DETALHEPRODUTOref(i, item, c)
+
+-- ao visualizar o detalhe de um produto, o cliente pode adicionar ao carrinho, fazendo com que seja separado estoque no banco.
+DETALHEPRODUTOref(i, item, c) =	consultaProdutoBD!i!item -> respostaProdutoBD!i?item?preco?estoque ->
+														(if estoque > 0 then
+															(adicionaCarrinho.i.item -> 
+																(
+																--separaEstoque e RespostaEstoqueBD são sincronizados com BDLOJA
+																separaEstoque!i!item -> 
+																	respostaEstoqueBD!i?retorno?preco ->
+																				if retorno == true then
+																					--ao adicionar item no carrinho a quantidade padrão é 1
+																					CARRINHOref(i, <(item,preco,1)>^c)
+																				else
+																					mensagemEstoqueIndisponivel.i.item -> 
+																								NAVEGACAOref(i, c) 
+																)
+															)
+															else
+																mensagemEstoqueIndisponivel.i.item -> 
+																								NAVEGACAOref(i, c)
+														)
+															[]
+														NAVEGACAOref(i,c)
+
+--i=id acesso; c=carrinho
+CARRINHOref(i, c) = 	if length(c) == 0 then
+						carrinhoVazio.i -> NAVEGACAOref(i,c)
+					---limite de 2 itens por carrinho (para evitar recursão infinita)
+					else if length(c) < 2 and length(c)>0 then 
+		  	  			(continuarComprando.i -> NAVEGACAOref(i, c)
+		  	  				[]
+		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAOref(i, c, 0)
+		  	  				[]
+		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
+		  	  			-- reverteEstoque é sincronizado com BDLOJA
+		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> reverteEstoque!i.iOut -> CARRINHOref(i, fnRemoveItem(iOut, c, <>)))
+		  	  		-- Carrinho atingiu limite de itens (não pode continuar comprando)
+		  	  		else 
+		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAOref(i, c, 0)
+		  	  				[]
+		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
+		  	  			-- reverteEstoque é sincronizado com BDLOJA
+		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> reverteEstoque!i.iOut -> CARRINHOref(i, fnRemoveItem(iOut, c, <>))
+
+-- i=id acesso; c=carrinho; n=tentativas de login.
+AUTENTICACAOref(i, c, n) = autenticaUsuario.i?login.senha -> 
+							((loginOk.i -> 
+
+									( (PAGAMENTOref(i,c)
+										[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
+												BANCOref ) 
+
+									) [| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
+																		OPERADORACARTAOref
+							) 
+					  			|~|
+							(loginFalhou.i!n+1 -> 
+								if(n+1 < 2) then 
+									AUTENTICACAOref(i, c, n+1) 
+								else
+									ACESSOCLIENTEref(i)))
+
+PAGAMENTOref(i,c) = 	let 
+									total = fnTotalCarrinho(c,0) 
+								within
+									escolherFormaPagamento.i.total -> 
+												((pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINEref(i,c,total))
+													[]
+												(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITOref(i, c, total)))	
+
+--eventos sincronizados com BANCO (ver composição paralela)
+PAGAMENTODEBITOONLINEref(i,c,total) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
+																	( 
+																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> SKIP)
+																			[]
+																		(negaTransacaoDebito.i -> PAGAMENTOref(i,c))
+																	)
+
+--eventos sincronizados com OPERADORACARTAO (ver composição paralela)																
+PAGAMENTOCREDITOref(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
+									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> aguardaResposta.i ->
+														(
+															(confirmaTransacaoCredito!i -> enviaProdutos!i -> SKIP)
+															[]
+															(negaTransacaoCredito!i -> PAGAMENTOref(i,c))
+														)								
+
+BANCOref = handshakeBanco?i?total ->
+					(transacaoDebitoOnline!i.total -> eventoInternoBanco!i -> 
+															(
+																(confirmaTransacaoDebito!i -> SKIP)
+																	[]
+																(negaTransacaoDebito!i -> SKIP)
+															))
+
+OPERADORACARTAOref = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
+															(
+																(confirmaTransacaoCredito!i -> SKIP)
+																	[]
+																(negaTransacaoCredito!i -> SKIP)
+															)
+
+assert LOJAVIRTUALref :[deadlock free[F]] -- PASSED
+assert LOJAVIRTUALref :[deterministic [F]] -- FAIL
+assert LOJAVIRTUALref :[divergence free [FD]] -- PASSED
