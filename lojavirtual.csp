@@ -45,9 +45,9 @@ channel eventoInternoOperadora:{1..2}
 channel eventoInternoBanco:{1..2}
 channel consultaEstoque:{1..2}.produtos
 channel confirmaEstoque:{1..2}.Bool
-channel separaEstoque:{1..2}
+channel separaEstoque:{1..2}.produtos
 channel mensagemEstoqueIndisponivel:{1..2}
-channel respostaBD:{1..2}.Bool 
+channel respostaEstoqueBD:{1..2}.Bool 
 channel BDesperaConfirmacao:{1..2}
 channel consultaProdutoBD:{1..2}.produtos
 channel respostaProdutoBD:{1..2}.produtos.{450, 870, 900, 1320, 1740}.{0..9}
@@ -58,10 +58,10 @@ LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
 LOJAVIRTUAL2(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
-												[| {|confirmaEstoque, separaEstoque, respostaBD, consultaProdutoBD, respostaProdutoBD|} |]
+												[| {|confirmaEstoque, separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD|} |]
 																	BDLOJA(produtosLoja)
 
-BDLOJA(produtosLoja) = 	(separaEstoque?i -> respostaBD!i.true -> BDLOJA(produtosLoja))
+BDLOJA(produtosLoja) = 	(separaEstoque?i?item -> SEPARAESTOQUEBD(i, produtosLoja, item, <>))
 							[]
 						(consultaProdutoBD?i?item -> CONSULTABD(i, produtosLoja, item))
 
@@ -71,14 +71,30 @@ CONSULTABD(i, produtosLoja, item) = 	let
 	 								within
 	 									respostaProdutoBD!i.item.preco.estoque -> BDLOJA(produtosLoja)
 
+SEPARAESTOQUEBD(i, produtosLoja, item, checked) = 	let
+														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+													within
+														if nome == item then
+															if estoque > 0 then
+																respostaEstoqueBD!i.true -> BDLOJA(checked)
+															else
+																respostaEstoqueBD!i.false -> BDLOJA(produtosLoja^checked)
+														else
+															SEPARAESTOQUEBD(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+
 --i=id acesso
 ACESSOCLIENTE(i) = acessoCliente.i -> NAVEGACAO(i, <>)
 
 --i=id acesso; c=carrinho
 NAVEGACAO(i, c) = pesquisaProduto.i -> acessaProduto.i?item -> DETALHEPRODUTO(i, item, c)
 
-DETALHEPRODUTO(i, item, c) = consultaProdutoBD!i.item -> respostaProdutoBD!i?preco?estoque -> 
-															adicionaCarrinho.i.item -> CARRINHO(i, <(item,preco,1)>^c)
+DETALHEPRODUTO(i, item, c) = consultaProdutoBD!i.item -> respostaProdutoBD!i.item?preco?estoque -> 
+															if estoque > 0 then
+																--ao adicionar item no carrinho a quantidade padrão é 1
+																adicionaCarrinho.i.item -> CARRINHO(i, <(item,preco,1)>^c)
+															else
+																mensagemEstoqueIndisponivel.i -> NAVEGACAO(i, c)
 
 -- Let .. Within
 -- DETALHEPRODUTO(i, item, c) = let 
@@ -118,27 +134,37 @@ CARRINHO(i, c) = 	if length(c) == 0 then
 		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem!i?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>)))
+		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> CARRINHO(i, fnRemoveItem(iOut, c, <>)))
 		  	  		-- Carrinho atingiu limite de itens (não pode continuar comprando)
 		  	  		else 
 		  	  			concluirCompra.i.fnTotalCarrinho(c,0) -> AUTENTICACAO(i, c, 0)
 		  	  				[]
 		  	  			-- Restrição de conjunto, só deve ser possível remover o que foi inserido.
-		  	  			removerItem!i?iOut:set(c) -> CARRINHO(i, fnRemoveItem(iOut, c, <>))
+		  	  			removerItem!i?iOut:fnIdItens(c,<>) -> CARRINHO(i, fnRemoveItem(iOut, c, <>))
 
 --iOut=item a remover; c=carrinho; checked=lista de itens ja comparados
 fnRemoveItem(iOut, c, checked) = 	let 
 										item = head(c)
+										nome = head( seq({nome | (nome, preco, estoque) <- {item} }) )
 						 			within 
-						 				if (item == iOut) then
+						 				if (nome == iOut) then
 						 					tail(c) ^ checked
 						 				else
-					 						fnRemoveItem(iOut, tail(c), checked ^ <item>)
+					 						fnRemoveItem(iOut, tail(c), checked^<item>)
 
 fnTotalCarrinho(c, t) = if length(c) > 0 then
 							fnTotalCarrinho(tail(c), t + fnPreco2( head(c)) )
 						 else 
 						 	t
+
+fnIdItens(c,idItens) = 	let 
+							item = head(c)
+							nome = head( seq({nome | (nome, preco, estoque) <- {item} }) ) 
+						within
+							if length(c) > 0 then
+								fnIdItens(tail(c), idItens^<nome>)
+							else
+								set(idItens)
 
 -- i=id acesso; c=carrinho; n=tentativas de login.
 AUTENTICACAO(i, c, n) = autenticaUsuario.i?login.senha -> 
@@ -163,7 +189,7 @@ PAGAMENTO(i,c) = 	let
 								within
 									escolherFormaPagamento.i.total -> 
 										--eventos sincronizados com BDLOJA (ver composição paralela ACESSOCLIENTE/BDLOJA)
-										separaEstoque!i -> respostaBD!i?retorno ->
+										separaEstoque!i -> respostaEstoqueBD!i?retorno ->
 										if (retorno == true) then
 											( 
 												(pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total) )
