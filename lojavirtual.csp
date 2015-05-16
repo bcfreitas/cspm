@@ -64,9 +64,13 @@ acessosSimultaneos = {1..2}
 LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
-LOJAVIRTUAL2(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
+LOJAVIRTUAL2(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
 												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
-																	BDLOJA(produtosLoja)
+																	BDLOJA(produtosLoja) )
+												[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
+																	BANCO )
+												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
+																	OPERADORACARTAO ) 
 
 BDLOJA(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABD(i, produtosLoja, item))
 							[]
@@ -204,21 +208,14 @@ fnIdItens(c,idItens) = 	let
 
 -- i=id acesso; c=carrinho; n=tentativas de login.
 AUTENTICACAO(i, c, n) = autenticaUsuario.i?login.senha -> 
-							((loginOk.i -> 
-
-									( (PAGAMENTO(i,c)
-										[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
-												BANCO ) 
-
-									) [| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
-																		OPERADORACARTAO
-							) 
-					  			|~|
-							(loginFalhou.i!n+1 -> 
-								if(n+1 < 2) then 
-									AUTENTICACAO(i, c, n+1) 
-								else
-									ACESSOCLIENTE(i)))
+													(
+														(loginOk.i -> PAGAMENTOref(i,c) )
+											  				|~|
+														(loginFalhou.i!n+1 -> 	if(n+1 < 2) then 
+																					AUTENTICACAO(i, c, n+1) 
+																				else
+																					ACESSOCLIENTE(i))
+													)
 
 PAGAMENTO(i,c) = 	let 
 									total = fnTotalCarrinho(c,0) 
@@ -231,7 +228,7 @@ PAGAMENTO(i,c) = 	let
 --eventos sincronizados com BANCO (ver composição paralela)
 PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
 																	( 
-																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> SKIP)
+																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> ACESSOCLIENTE(i))
 																			[]
 																		(negaTransacaoDebito.i -> PAGAMENTO(i,c))
 																	)
@@ -240,7 +237,7 @@ PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco!i.total -> transacaoDebitoOnli
 PAGAMENTOCREDITO(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
 									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> aguardaResposta.i ->
 														(
-															(confirmaTransacaoCredito!i -> enviaProdutos!i -> SKIP)
+															(confirmaTransacaoCredito!i -> enviaProdutos!i -> ACESSOCLIENTE(i))
 															[]
 															(negaTransacaoCredito!i -> PAGAMENTO(i,c))
 														)								
@@ -248,16 +245,16 @@ PAGAMENTOCREDITO(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -
 BANCO = handshakeBanco?i?total ->
 					(transacaoDebitoOnline!i.total -> eventoInternoBanco!i -> 
 															(
-																(confirmaTransacaoDebito!i -> SKIP)
+																(confirmaTransacaoDebito!i -> BANCO)
 																	[]
-																(negaTransacaoDebito!i -> SKIP)
+																(negaTransacaoDebito!i -> BANCO)
 															))
 
 OPERADORACARTAO = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
 															(
-																(confirmaTransacaoCredito!i -> SKIP)
+																(confirmaTransacaoCredito!i -> OPERADORACARTAO)
 																	[]
-																(negaTransacaoCredito!i -> SKIP)
+																(negaTransacaoCredito!i -> OPERADORACARTAO)
 															)
 			
 
@@ -287,13 +284,34 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 --------------------------------------------VERSÃO REFINADA-----------------------------------------------
 ----------------------------------------------------------------------------------------------------------
 ----------------------------------------------------------------------------------------------------------
+--RRRRRRRRRRRRRRRRR                          ffffffffffffffff    iiii                                                d::::::d                  
+--R::::::::::::::::R                        f::::::::::::::::f  i::::i                                               d::::::d                  
+--R::::::RRRRRR:::::R                      f::::::::::::::::::f  iiii                                                d::::::d                  
+--RR:::::R     R:::::R                     f::::::fffffff:::::f                                                      d:::::d                   
+--  R::::R     R:::::R    eeeeeeeeeeee     f:::::f       ffffffiiiiiiinnnn  nnnnnnnn      aaaaaaaaaaaaa      ddddddddd:::::d   aaaaaaaaaaaaa   
+--  R::::R     R:::::R  ee::::::::::::ee   f:::::f             i:::::in:::nn::::::::nn    a::::::::::::a   dd::::::::::::::d   a::::::::::::a  
+--  R::::RRRRRR:::::R  e::::::eeeee:::::eef:::::::ffffff        i::::in::::::::::::::nn   aaaaaaaaa:::::a d::::::::::::::::d   aaaaaaaaa:::::a 
+--  R:::::::::::::RR  e::::::e     e:::::ef::::::::::::f        i::::inn:::::::::::::::n           a::::ad:::::::ddddd:::::d            a::::a 
+--  R::::RRRRRR:::::R e:::::::eeeee::::::ef::::::::::::f        i::::i  n:::::nnnn:::::n    aaaaaaa:::::ad::::::d    d:::::d     aaaaaaa:::::a 
+--  R::::R     R:::::Re:::::::::::::::::e f:::::::ffffff        i::::i  n::::n    n::::n  aa::::::::::::ad:::::d     d:::::d   aa::::::::::::a 
+--  R::::R     R:::::Re::::::eeeeeeeeeee   f:::::f              i::::i  n::::n    n::::n a::::aaaa::::::ad:::::d     d:::::d  a::::aaaa::::::a 
+--  R::::R     R:::::Re:::::::e            f:::::f              i::::i  n::::n    n::::na::::a    a:::::ad:::::d     d:::::d a::::a    a:::::a 
+--RR:::::R     R:::::Re::::::::e          f:::::::f            i::::::i n::::n    n::::na::::a    a:::::ad::::::ddddd::::::dda::::a    a:::::a 
+--R::::::R     R:::::R e::::::::eeeeeeee  f:::::::f            i::::::i n::::n    n::::na:::::aaaa::::::a d:::::::::::::::::da:::::aaaa::::::a 
+--R::::::R     R:::::R  ee:::::::::::::e  f:::::::f            i::::::i n::::n    n::::n a::::::::::aa:::a d:::::::::ddd::::d a::::::::::aa:::a
+--RRRRRRRR     RRRRRRR    eeeeeeeeeeeeee  fffffffff            iiiiiiii nnnnnn    nnnnnn  aaaaaaaaaa  aaaa  ddddddddd   ddddd  aaaaaaaaaa  aaaa
 
 LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
-LOJAVIRTUAL2ref(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
+LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
 												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
-																	BDLOJAref(produtosLoja)
+																	BDLOJAref(produtosLoja) )
+												[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
+																	BANCOref )
+												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
+																	OPERADORACARTAOref ) 
+
 
 BDLOJAref(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item))
 							[]
@@ -385,21 +403,14 @@ CARRINHOref(i, c) = 	if length(c) == 0 then
 
 -- i=id acesso; c=carrinho; n=tentativas de login.
 AUTENTICACAOref(i, c, n) = autenticaUsuario.i?login.senha -> 
-							((loginOk.i -> 
-
-									( (PAGAMENTOref(i,c)
-										[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
-												BANCOref ) 
-
-									) [| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
-																		OPERADORACARTAOref
-							) 
-					  			|~|
-							(loginFalhou.i!n+1 -> 
-								if(n+1 < 2) then 
-									AUTENTICACAOref(i, c, n+1) 
-								else
-									ACESSOCLIENTEref(i)))
+													(
+														(loginOk.i -> PAGAMENTOref(i,c) )
+											  				|~|
+														(loginFalhou.i!n+1 -> 	if(n+1 < 2) then 
+																					AUTENTICACAOref(i, c, n+1) 
+																				else
+																					ACESSOCLIENTEref(i))
+													)
 
 PAGAMENTOref(i,c) = 	let 
 									total = fnTotalCarrinho(c,0) 
@@ -412,7 +423,7 @@ PAGAMENTOref(i,c) = 	let
 --eventos sincronizados com BANCO (ver composição paralela)
 PAGAMENTODEBITOONLINEref(i,c,total) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
 																	( 
-																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> SKIP)
+																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> ACESSOCLIENTEref(i))
 																			[]
 																		(negaTransacaoDebito.i -> PAGAMENTOref(i,c))
 																	)
@@ -421,7 +432,7 @@ PAGAMENTODEBITOONLINEref(i,c,total) = handshakeBanco!i.total -> transacaoDebitoO
 PAGAMENTOCREDITOref(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
 									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> aguardaResposta.i ->
 														(
-															(confirmaTransacaoCredito!i -> enviaProdutos!i -> SKIP)
+															(confirmaTransacaoCredito!i -> enviaProdutos!i -> ACESSOCLIENTEref(i))
 															[]
 															(negaTransacaoCredito!i -> PAGAMENTOref(i,c))
 														)								
@@ -429,18 +440,21 @@ PAGAMENTOCREDITOref(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codig
 BANCOref = handshakeBanco?i?total ->
 					(transacaoDebitoOnline!i.total -> eventoInternoBanco!i -> 
 															(
-																(confirmaTransacaoDebito!i -> SKIP)
+																(confirmaTransacaoDebito!i -> BANCOref)
 																	[]
-																(negaTransacaoDebito!i -> SKIP)
+																(negaTransacaoDebito!i -> BANCOref)
 															))
 
 OPERADORACARTAOref = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
 															(
-																(confirmaTransacaoCredito!i -> SKIP)
+																(confirmaTransacaoCredito!i -> OPERADORACARTAOref)
 																	[]
-																(negaTransacaoCredito!i -> SKIP)
+																(negaTransacaoCredito!i -> OPERADORACARTAOref)
 															)
 
 assert LOJAVIRTUALref :[deadlock free[F]] -- PASSED
 assert LOJAVIRTUALref :[deterministic [F]] -- FAIL
 assert LOJAVIRTUALref :[divergence free [FD]] -- PASSED
+
+assert LOJAVIRTUAL [T= LOJAVIRTUALref -- PASSED
+assert LOJAVIRTUALref [T= LOJAVIRTUAL -- PASSED
