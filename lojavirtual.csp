@@ -305,10 +305,11 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
-LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
-												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque,
-																			autenticaUsuario, loginOk, loginFalhou|} |]
+LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
+												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
 																	BDLOJAref(produtosLoja) )
+												[| {|autenticaUsuario, loginOk, loginFalhou|} |] 
+																	BDLOJA2ref(seq(usuarios) ) )
 												[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
 																	BANCOref )
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
@@ -320,8 +321,8 @@ BDLOJAref(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABDref(i, produto
 							(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
 								[]
 							(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))
-								[]
-							(autenticaUsuario?i?nome?senha -> AUTENTICAUSUARIOBDref(i, produtosLoja, nome, senha, seq(usuarios)) )
+
+BDLOJA2ref(usuarios) = autenticaUsuario?i?nome?senha -> AUTENTICAUSUARIOBDref(i, nome, senha, usuarios, <>)
 
 
 CONSULTABDref(i, produtosLoja, item) = 	let 
@@ -356,18 +357,18 @@ REVERTEESTOQUEBDref(i, produtosLoja, item, checked) = 	let
 														else
 															REVERTEESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
 
-AUTENTICAUSUARIOBDref(i, produtosLoja, nome, senha, usuarios) = 	
+AUTENTICAUSUARIOBDref(i, nome, senha, usuarios, checked) = 	
 															let
 																nomeBD = head( seq({nome | (nome, senha) <- {head(usuarios)} }) )
 																senhaBD = head( seq({senha | (nome, senha) <- {head(usuarios)} }) )
 															within
 																if nome == nomeBD then
 																	if senha == senhaBD then
-																		loginOk.i -> BDLOJAref(produtosLoja)
+																		loginOk.i -> BDLOJA2ref(usuarios^checked)
 																	else 
-																		loginFalhou.i -> BDLOJAref(produtosLoja)
+																		loginFalhou.i -> BDLOJA2ref(usuarios^checked)
 																else 
-																	AUTENTICAUSUARIOBDref(i, produtosLoja, nome, senha, tail(usuarios))
+																	AUTENTICAUSUARIOBDref(i, nome, senha, tail(usuarios), <head(usuarios)>^checked)
 
 --i=id acesso
 ACESSOCLIENTEref(i) = acessoCliente.i -> NAVEGACAOref(i, <>)
@@ -474,4 +475,7 @@ assert LOJAVIRTUALref :[deterministic [F]] -- FAIL
 assert LOJAVIRTUALref :[divergence free [FD]] -- PASSED
 
 assert LOJAVIRTUAL [T= LOJAVIRTUALref -- PASSED
-assert LOJAVIRTUALref [T= LOJAVIRTUAL -- PASSED
+assert LOJAVIRTUALref [T= LOJAVIRTUAL -- FAIL
+
+assert LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUALref \{| autenticaUsuario, loginOk, loginFalhou |} -- PASSED
+assert LOJAVIRTUALref  \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} -- PASSED
