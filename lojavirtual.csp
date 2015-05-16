@@ -4,9 +4,11 @@ datatype produto = Smartphone | TV
 datatype pessoas = Joao | Maria
 produtos = {Smartphone, TV}
 produtosBD = {(Smartphone, 100, 2), (TV, 200, 1)}
+
 --os conjuntos abaixo foram criados para melhorar o desempenho do FDR
 totaisPossiveis = {100,200,300,400}
 precosUnitariosPossiveis = {100,200}
+
 usuarios = {(Joao, 123), (Maria, 345)}
 
 
@@ -51,8 +53,8 @@ channel eventoInternoBanco:{1..2}
 channel consultaEstoque:{1..2}.produtos
 channel confirmaEstoque:{1..2}.Bool
 channel separaEstoque:{1..2}.produtos
-channel mensagemEstoqueIndisponivel:{1..2}
-channel respostaEstoqueBD:{1..2}.Bool 
+channel mensagemEstoqueIndisponivel:{1..2}.produtos
+channel respostaEstoqueBD:{1..2}.Bool.precosUnitariosPossiveis
 channel BDesperaConfirmacao:{1..2}
 channel consultaProdutoBD:{1..2}.produtos
 channel respostaProdutoBD:{1..2}.produtos.precosUnitariosPossiveis.{0..9}
@@ -83,9 +85,9 @@ SEPARAESTOQUEBD(i, produtosLoja, item, checked) = 	let
 													within
 														if nome == item then
 															if estoque > 0 then
-																respostaEstoqueBD!i.true -> BDLOJA(<(nome,preco,estoque-1)>^(tail(produtosLoja))^checked)
+																respostaEstoqueBD!i.true.preco -> BDLOJA(<(nome,preco,estoque-1)>^(tail(produtosLoja))^checked)
 															else
-																respostaEstoqueBD!i.false -> BDLOJA(produtosLoja^checked)
+																respostaEstoqueBD!i.false.preco -> BDLOJA(produtosLoja^checked)
 														else
 															SEPARAESTOQUEBD(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
 
@@ -95,19 +97,17 @@ ACESSOCLIENTE(i) = acessoCliente.i -> NAVEGACAO(i, <>)
 --i=id acesso; c=carrinho
 NAVEGACAO(i, c) = pesquisaProduto.i -> acessaProduto.i?item -> DETALHEPRODUTO(i, item, c)
 
-DETALHEPRODUTO(i, item, c) = consultaProdutoBD!i.item -> respostaProdutoBD!i.item?preco?estoque -> 
-															if estoque > 0 then
-																--ao adicionar item no carrinho a quantidade padrão é 1
-																adicionaCarrinho.i.item -> CARRINHO(i, <(item,preco,1)>^c)
-															else
-																mensagemEstoqueIndisponivel.i -> NAVEGACAO(i, c)
-
--- Let .. Within
--- DETALHEPRODUTO(i, item, c) = let 
--- 								preco = fnPreco(item)
--- 								estoque = fnEstoque(item) 
--- 							 within
--- 							 	exibeInfoProduto.i.preco.estoque -> adicionaCarrinho.i!item -> CARRINHO(i, <item>^c)
+-- ao visualizar o detalhe de um produto, o cliente pode adicionar ao carrinho, fazendo com que seja separado estoque no banco.
+DETALHEPRODUTO(i, item, c) =	adicionaCarrinho.i.item -> 
+											separaEstoque!i!item -> 
+													--separaEstoque e RespostaEstoqueBD são sincronizados com BDLOJA
+													respostaEstoqueBD!i?retorno?preco ->
+																if retorno == true then
+																	--ao adicionar item no carrinho a quantidade padrão é 1
+																	CARRINHO(i, <(item,preco,1)>^c)
+																else
+																	mensagemEstoqueIndisponivel.i.item -> 
+																				NAVEGACAO(i, c)
 
 -- Comprehension
 fnPreco(produtosLoja, item) = 	let 
@@ -194,25 +194,19 @@ PAGAMENTO(i,c) = 	let
 									total = fnTotalCarrinho(c,0) 
 								within
 									escolherFormaPagamento.i.total -> 
-										--eventos sincronizados com BDLOJA (ver composição paralela ACESSOCLIENTE/BDLOJA)
-										separaEstoque!i!Smartphone -> respostaEstoqueBD!i?retorno ->
-										if (retorno == true) then
-											( 
-												(pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total) )
-																-- Composição paralela generalizada
+												((pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total))
 													[]
-												(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITO(i, c, total) )	
-											)
-										else
-											mensagemEstoqueIndisponivel.i -> STOP
+												(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITO(i, c, total)))	
 
+--eventos sincronizados com BANCO (ver composição paralela)
 PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
 																	( 
 																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> SKIP)
 																			[]
 																		(negaTransacaoDebito.i -> PAGAMENTO(i,c))
 																	)
-																
+
+--eventos sincronizados com OPERADORACARTAO (ver composição paralela)																
 PAGAMENTOCREDITO(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
 									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> aguardaResposta.i ->
 														(
@@ -245,9 +239,9 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 
 --TODO versão normal: 
 --acrescentar valor. OK
---controle de estoque (concorrencia por recursos)
---acrescentar paralelismo sincronizado com cliente e/ou operadora de cartão de crédito. OK
---frete?
+--controle de estoque (concorrencia por recursos) OK
+--acrescentar paralelismo sincronizado com cliente e/ou operadora de cartão de crédito. OK 
+--frete? 
 
 --
 --TODO versão refinada: 
@@ -269,3 +263,9 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 --  												(dadosContaInvalidos -> negaTransacao -> BANCO)
 
 -- OPERADORACARTAO = transacaoCartao -> checaDadosUsuario -> checaCreditoCliente -> autorizaPagamento
+
+LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
+
+LOJAVIRTUAL2ref(produtosLoja) =  (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
+												[| {|confirmaEstoque, separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD|} |]
+																	BDLOJA(produtosLoja)
