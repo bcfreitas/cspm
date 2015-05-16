@@ -10,14 +10,15 @@ totaisPossiveis = {100,200,300,400}
 precosUnitariosPossiveis = {100,200}
 
 usuarios = {(Joao, 123), (Maria, 345)}
+nomesPossiveis = {Joao, Maria}
 
 
 --{450, 870, 900, 1320, 1740}
 --O primeiro parâmetro de todos os canais é a identificação do acesso: 1 ou 2.
-channel autenticaUsuario:{1..2}.{Joao, Maria}.{123, 456}
+channel autenticaUsuario:{1..2}.{Joao, Maria}.{123, 345}
 channel adicionaCarrinho:{1..2}.produtos
 channel acessaProduto:{1..2}.produtos
-channel loginFalhou:{1..2}.{0..2}
+channel loginFalhou:{1..2}
 channel acessoCliente:{1..2}
 channel pesquisaProduto:{1..2}
 channel confereItens:{1..2}
@@ -211,7 +212,7 @@ AUTENTICACAO(i, c, n) = autenticaUsuario.i?login.senha ->
 													(
 														(loginOk.i -> PAGAMENTOref(i,c) )
 											  				|~|
-														(loginFalhou.i!n+1 -> 	if(n+1 < 2) then 
+														(loginFalhou.i -> 	if(n+1 < 2) then 
 																					AUTENTICACAO(i, c, n+1) 
 																				else
 																					ACESSOCLIENTE(i))
@@ -272,10 +273,10 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 
 --
 --TODO versão refinada: 
---retirar não determinismo do login
+--retirar não determinismo do login OK
 --acrescentar possibilidade de cadastro de novo usuário e usar hiding para comparar
 -- CADASTRONOVOUSUARIO(i,c,n) = cadastrarNovoUsuario.i -> AUTENTICACAO(i,c,n)
--- retirar o paralelismo generalizado entre PAGAMENTO e BANCO, e colocar em ACESSOS / BANCO para retirar o deadlock do skip.
+-- retirar o paralelismo generalizado entre PAGAMENTO e BANCO, e colocar em ACESSOS / BANCO para retirar o deadlock do skip. OK
 
 
 
@@ -305,7 +306,8 @@ LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
 LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
-												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
+												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque,
+																			autenticaUsuario, loginOk, loginFalhou|} |]
 																	BDLOJAref(produtosLoja) )
 												[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
 																	BANCOref )
@@ -314,10 +316,12 @@ LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE
 
 
 BDLOJAref(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item))
-							[]
-						(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
-							[]
-						(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))
+								[]
+							(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
+								[]
+							(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))
+								[]
+							(autenticaUsuario?i?nome?senha -> AUTENTICAUSUARIOBDref(i, produtosLoja, nome, senha, seq(usuarios)) )
 
 
 CONSULTABDref(i, produtosLoja, item) = 	let 
@@ -351,6 +355,19 @@ REVERTEESTOQUEBDref(i, produtosLoja, item, checked) = 	let
 																BDLOJAref(<(nome,preco,estoque)>^(tail(produtosLoja))^checked)
 														else
 															REVERTEESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+
+AUTENTICAUSUARIOBDref(i, produtosLoja, nome, senha, usuarios) = 	
+															let
+																nomeBD = head( seq({nome | (nome, senha) <- {head(usuarios)} }) )
+																senhaBD = head( seq({senha | (nome, senha) <- {head(usuarios)} }) )
+															within
+																if nome == nomeBD then
+																	if senha == senhaBD then
+																		loginOk.i -> BDLOJAref(produtosLoja)
+																	else 
+																		loginFalhou.i -> BDLOJAref(produtosLoja)
+																else 
+																	AUTENTICAUSUARIOBDref(i, produtosLoja, nome, senha, tail(usuarios))
 
 --i=id acesso
 ACESSOCLIENTEref(i) = acessoCliente.i -> NAVEGACAOref(i, <>)
@@ -405,8 +422,8 @@ CARRINHOref(i, c) = 	if length(c) == 0 then
 AUTENTICACAOref(i, c, n) = autenticaUsuario.i?login.senha -> 
 													(
 														(loginOk.i -> PAGAMENTOref(i,c) )
-											  				|~|
-														(loginFalhou.i!n+1 -> 	if(n+1 < 2) then 
+											  				[]
+														(loginFalhou.i -> 	if(n+1 < 2) then 
 																					AUTENTICACAOref(i, c, n+1) 
 																				else
 																					ACESSOCLIENTEref(i))
