@@ -3,9 +3,14 @@
 datatype produto = Smartphone | TV
 datatype pessoas = Joao | Maria
 produtos = {Smartphone, TV}
-produtosBD = {(Smartphone, 450, 3), (TV, 870, 2)}
+produtosBD = {(Smartphone, 100, 2), (TV, 200, 1)}
+--os conjuntos abaixo foram criados para melhorar o desempenho do FDR
+totaisPossiveis = {100,200,300,400}
+precosUnitariosPossiveis = {100,200}
 usuarios = {(Joao, 123), (Maria, 345)}
 
+
+--{450, 870, 900, 1320, 1740}
 --O primeiro parâmetro de todos os canais é a identificação do acesso: 1 ou 2.
 channel autenticaUsuario:{1..2}.{Joao, Maria}.{123, 456}
 channel adicionaCarrinho:{1..2}.produtos
@@ -17,29 +22,29 @@ channel confereItens:{1..2}
 channel finalizaCompra:{1..2}
 channel continuarComprando:{1..2}
 channel confirmaEndereco:{1.2}
-channel escolherFormaPagamento:{1..2}.{450, 870, 900, 1320, 1740}
+channel escolherFormaPagamento:{1..2}.totaisPossiveis
 channel confirmaPagamento:{1..2}
 channel calcularFrete:{1..2}
-channel concluirCompra:{1..2}.{450, 870, 900, 1320, 1740}
+channel concluirCompra:{1..2}.totaisPossiveis
 channel loginOk:{1..2} 
 channel cadastrarNovoUsuario:{1..2}
-channel exibeInfoProduto:{1..2}.{450,870}
+channel exibeInfoProduto:{1..2}.{1..10}
 channel removerItem:{1..2}.produtos
 channel carrinhoVazio:{1..2}
 channel pagamentoBoleto:{1..2}
-channel pagamentoDebitoOnline:{1..2}.{450, 870, 900, 1320, 1740}
-channel transacaoDebitoOnline:{1..2}.{450, 870, 900, 1320, 1740}
-channel pagamentoCartaoCredito:{1..2}.{450, 870, 900, 1320, 1740}
+channel pagamentoDebitoOnline:{1..2}.totaisPossiveis
+channel transacaoDebitoOnline:{1..2}.totaisPossiveis
+channel pagamentoCartaoCredito:{1..2}.totaisPossiveis
 channel confirmaTransacaoCredito:{1..2}
 channel negaTransacaoCredito:{1..2}
 channel confirmaTransacaoDebito:{1..2}
 channel negaTransacaoDebito:{1..2}
 channel pagamentoFalha:{1..2}
 channel enviaProdutos:{1..2}
-channel handshakeBanco:{1..2}.{450, 870, 900, 1320, 1740}
+channel handshakeBanco:{1..2}.totaisPossiveis
 channel aguardaResposta:{1..2}
 channel transacaoCredito:{1..2}
-channel handshakeOperadora:{1..2}.{450, 870, 900, 1320, 1740}.{Joao, Maria}.{1111111,2222222}.{11,22}
+channel handshakeOperadora:{1..2}.totaisPossiveis.{Joao, Maria}.{1111111,2222222}.{11,22}
 channel informaDadosCartao:{1..2}.{Joao, Maria}.{1111111,2222222}.{11,22}
 channel eventoInternoOperadora:{1..2}
 channel eventoInternoBanco:{1..2}
@@ -50,7 +55,7 @@ channel mensagemEstoqueIndisponivel:{1..2}
 channel respostaEstoqueBD:{1..2}.Bool 
 channel BDesperaConfirmacao:{1..2}
 channel consultaProdutoBD:{1..2}.produtos
-channel respostaProdutoBD:{1..2}.produtos.{450, 870, 900, 1320, 1740}.{0..9}
+channel respostaProdutoBD:{1..2}.produtos.precosUnitariosPossiveis.{0..9}
 
 acessosSimultaneos = {1..2}
 
