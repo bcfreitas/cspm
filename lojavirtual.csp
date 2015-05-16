@@ -73,11 +73,12 @@ CONSULTABD(i, produtosLoja, item) = 	let
 
 SEPARAESTOQUEBD(i, produtosLoja, item, checked) = 	let
 														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+														preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) )
 														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
 													within
 														if nome == item then
 															if estoque > 0 then
-																respostaEstoqueBD!i.true -> BDLOJA(checked)
+																respostaEstoqueBD!i.true -> BDLOJA(<(nome,preco,estoque-1)>^(tail(produtosLoja))^checked)
 															else
 																respostaEstoqueBD!i.false -> BDLOJA(produtosLoja^checked)
 														else
@@ -189,7 +190,7 @@ PAGAMENTO(i,c) = 	let
 								within
 									escolherFormaPagamento.i.total -> 
 										--eventos sincronizados com BDLOJA (ver composição paralela ACESSOCLIENTE/BDLOJA)
-										separaEstoque!i -> respostaEstoqueBD!i?retorno ->
+										separaEstoque!i!Smartphone -> respostaEstoqueBD!i?retorno ->
 										if (retorno == true) then
 											( 
 												(pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total) )
