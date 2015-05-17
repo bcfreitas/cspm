@@ -58,6 +58,7 @@ channel respostaEstoqueBD:{1..2}.Bool.precosUnitariosPossiveis
 channel BDesperaConfirmacao:{1..2}
 channel consultaProdutoBD:{1..2}.produtos
 channel respostaProdutoBD:{1..2}.produtos.precosUnitariosPossiveis.{0..9}
+channel entradaNovosProdutos
 
 acessosSimultaneos = {1..2}
 
@@ -66,7 +67,7 @@ LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
 LOJAVIRTUAL2(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
 												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
-																	BDLOJA(produtosLoja) )
+																	BDLOJA(produtosLoja) \{|entradaNovosProdutos|})
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
 																	BANCO )
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
@@ -77,6 +78,8 @@ BDLOJA(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABD(i, produtosLoja,
 						(separaEstoque?i?item -> SEPARAESTOQUEBD(i, produtosLoja, item, <>))
 							[]
 						(reverteEstoque?i?item -> REVERTEESTOQUEBD(i, produtosLoja, item, <>))
+							[]
+						(entradaNovosProdutos -> BDLOJA(produtosLoja))
 
 
 CONSULTABD(i, produtosLoja, item) = 	let 
@@ -312,7 +315,7 @@ LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
 LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
 												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
-																	BDLOJAref(produtosLoja) )
+																	BDLOJAref(produtosLoja) \ {|entradaNovosProdutos|} )
 												[| {|autenticaUsuario, loginOk, loginFalhou|} |] 
 																	BDLOJA2ref(seq(usuarios) ) )
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
@@ -321,11 +324,33 @@ LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIEN
 																	OPERADORACARTAOref(seq(repositorioCartoes)) ) 
 
 
-BDLOJAref(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item))
-								[]
-							(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
-								[]
-							(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))
+BDLOJAref(produtosLoja) = 	if 
+								fnEstoqueZerado(produtosLoja)
+							then
+								(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item))
+									[]
+								(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
+									[]
+								(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))
+									[]
+								(entradaNovosProdutos -> BDLOJAref(seq(produtosBD)))
+							else
+								(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item))
+									[]
+								(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
+									[]
+								(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))	
+
+fnEstoqueZerado(produtosLoja) = if length(produtosLoja)>0 then
+									let
+										estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
+									within
+										if estoque>0 then
+											false
+										else
+											fnEstoqueZerado(tail(produtosLoja))
+								else
+									true
 
 BDLOJA2ref(usuarios) = autenticaUsuario?i?nome?senha -> AUTENTICAUSUARIOBDref(i, nome, senha, usuarios, <>)
 
@@ -535,7 +560,7 @@ AUTORIZACAOOPERADORAref(i, total, cartao, codigo, nome, repositorioCartoes, chec
 
 
 assert LOJAVIRTUALref :[deadlock free[F]] -- PASSED
-assert LOJAVIRTUALref :[deterministic [F]] -- FAIL
+assert LOJAVIRTUALref :[deterministic [F]] -- PASSED
 assert LOJAVIRTUALref :[divergence free [FD]] -- PASSED
 
 assert LOJAVIRTUAL [T= LOJAVIRTUALref -- PASSED
@@ -543,3 +568,6 @@ assert LOJAVIRTUALref [T= LOJAVIRTUAL -- FAIL
 
 assert LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUALref \{| autenticaUsuario, loginOk, loginFalhou |} -- PASSED
 assert LOJAVIRTUALref  \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} -- PASSED
+
+assert LOJAVIRTUAL [FD= LOJAVIRTUALref
+assert LOJAVIRTUALref [FD= LOJAVIRTUAL
