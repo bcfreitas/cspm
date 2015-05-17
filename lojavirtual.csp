@@ -35,11 +35,11 @@ channel removerItem:{1..2}.produtos
 channel carrinhoVazio:{1..2}
 channel pagamentoBoleto:{1..2}
 channel pagamentoDebitoOnline:{1..2}.totaisPossiveis
-channel transacaoDebitoOnline:{1..2}.totaisPossiveis
+channel transacaoDebitoOnline:{1..2}.totaisPossiveis.{333333,444444}.nomesPossiveis.{321,654}
 channel pagamentoCartaoCredito:{1..2}.totaisPossiveis
 channel confirmaTransacaoCredito:{1..2}.Bool 
 channel negaTransacaoCredito:{1..2}
-channel confirmaTransacaoDebito:{1..2}
+channel confirmaTransacaoDebito:{1..2}.Bool
 channel negaTransacaoDebito:{1..2}
 channel pagamentoFalha:{1..2}
 channel enviaProdutos:{1..2}
@@ -67,7 +67,7 @@ LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 LOJAVIRTUAL2(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
 												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
 																	BDLOJA(produtosLoja) )
-												[| {|handshakeBanco, transacaoDebitoOnline, confirmaTransacaoDebito, negaTransacaoDebito|} |] 
+												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
 																	BANCO )
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
 																	OPERADORACARTAO ) 
@@ -218,19 +218,19 @@ AUTENTICACAO(i, c, n) = autenticaUsuario.i?login.senha ->
 													)
 
 PAGAMENTO(i,c) = 	let 
-									total = fnTotalCarrinho(c,0) 
-								within
-									escolherFormaPagamento.i.total -> 
-												((pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total))
-													[]
-												(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITO(i, c, total)))	
+						total = fnTotalCarrinho(c,0) 
+					within
+						escolherFormaPagamento.i.total -> 
+									((pagamentoDebitoOnline!i.total -> PAGAMENTODEBITOONLINE(i,c,total))
+										[]
+									(pagamentoCartaoCredito!i.total -> PAGAMENTOCREDITO(i, c, total)))	
 
 --eventos sincronizados com BANCO (ver composição paralela)
-PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco!i.total -> transacaoDebitoOnline!i.total -> aguardaResposta!i ->
+PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco!i.total -> aguardaResposta!i ->
 																	( 
-																		(confirmaTransacaoDebito.i -> enviaProdutos.i -> ACESSOCLIENTE(i))
+																		(confirmaTransacaoDebito!i?true -> enviaProdutos.i -> ACESSOCLIENTE(i))
 																			|~|
-																		(negaTransacaoDebito.i -> PAGAMENTO(i,c))
+																		(confirmaTransacaoDebito!i?false -> PAGAMENTO(i,c))
 																	)
 
 --eventos sincronizados com OPERADORACARTAO (ver composição paralela)																
@@ -243,12 +243,13 @@ PAGAMENTOCREDITO(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -
 														)								
 
 BANCO = handshakeBanco?i?total ->
-					(transacaoDebitoOnline!i.total -> eventoInternoBanco!i -> 
+					transacaoDebitoOnline!i.total?conta?usuario?senha -> 
+														eventoInternoBanco!i -> 
 															(
-																(confirmaTransacaoDebito!i -> BANCO)
+																(confirmaTransacaoDebito!i!true -> BANCO)
 																	|~|
-																(negaTransacaoDebito!i -> BANCO)
-															))
+																(confirmaTransacaoDebito!i!false -> BANCO)
+															)
 
 OPERADORACARTAO = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
 															(
@@ -304,7 +305,7 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 --(cartao, cdc, nome, limite de credito)
 repositorioCartoes={(1111111, 11, Joao, 500), (2222222, 22, Maria, 100)}
 --(conta, usuario, senha, saldo em conta)
-repositorioContas={(333333, Joao, 321, 100), (444444, Maria, 654, 500)}
+repositorioContas={(333333, Joao, 321, 100), (444444, Maria, 654, 300)}
 
 LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 
@@ -315,8 +316,8 @@ LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIEN
 												[| {|autenticaUsuario, loginOk, loginFalhou|} |] 
 																	BDLOJA2ref(seq(usuarios) ) )
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
-																	BANCOref(repositorioContas) )
-												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito, negaTransacaoCredito|} |] 
+																	BANCOref(seq(repositorioContas) ) )
+												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
 																	OPERADORACARTAOref(seq(repositorioCartoes)) ) 
 
 
@@ -461,46 +462,76 @@ PAGAMENTOCREDITOref(i, c, total) = informaDadosCartao!i?nome?cartao?codigo ->
 																	 PAGAMENTOref(i,c)
 
 BANCOref(repositorioContas) = handshakeBanco?i?total ->
-					(transacaoDebitoOnline!i.total?conta?usuario?senha ->
-													 eventoInternoBanco!i -> 
-														let 
-															contaBD = head(seq({conta | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
-															usuarioBD = head(seq({usuario | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
-															senhaBD = head(seq({senha | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
-															saldo = head(seq({saldo | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
-														within
-															if 
-																conta==contaBD and usuario==usuarioBD and senha==senhaBD 
-															then
-																confirmaTransacaoDebito!i!true -> BANCOref(repositorioContas)
-															else
-																confirmaTransacaoDebito!i!false -> BANCOref(repositorioContas)
+					transacaoDebitoOnline!i.total?conta?usuario?senha ->
+													 eventoInternoBanco!i -> AUTORIZACAOBANCOref(i, total, conta, usuario, senha, repositorioContas, <>)
+
+AUTORIZACAOBANCOref(i, total,conta,usuario,senha,repositorioContas, checked) =  
+									let 
+										contaBD = head(seq({conta | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
+										usuarioBD = head(seq({usuario | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
+										senhaBD = head(seq({senha | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
+										saldo = head(seq({saldo | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
+									within
+										if 
+											-- chave primaria da busca
+											conta==contaBD 
+										then
+											if
+												--os dados de login no sistema bancário estão ok.
+												usuario==usuarioBD and senha==senhaBD 
+											then
+												if 
+													-- há saldo disponível na conta
+													saldo >= total
+												then
+													-- autoriza transação
+													confirmaTransacaoDebito!i!true -> BANCOref(<(conta, usuario, senha, saldo-total)>^tail(repositorioContas)^checked)
+												else
+													-- não há saldo, não autoriza
+													confirmaTransacaoDebito!i!false -> BANCOref(repositorioContas^checked)
+											else
+												-- os dados de login não conferem, nega transação
+												confirmaTransacaoDebito!i!false -> BANCOref(repositorioContas^checked)
+										else
+											-- não é o registro desejado, busca o próximo.
+											AUTORIZACAOBANCOref(i,total,conta,usuario,senha, tail(repositorioContas), <head(repositorioContas)>^checked )
+
 
 OPERADORACARTAOref(repositorioCartoes) = handshakeOperadora?i?total?nome?cartao?codigo -> 
-													eventoInternoOperadora!i -> if 
-																					fnAutorizacaoCredito(total, nome, cartao, codigo, repositorioCartoes) == true 
-																				then
-																					(confirmaTransacaoCredito!i.true -> OPERADORACARTAOref(repositorioCartoes))
-																				else
-																					(confirmaTransacaoCredito!i.false -> OPERADORACARTAOref(repositorioCartoes))
+													eventoInternoOperadora!i -> AUTORIZACAOOPERADORAref(i, total, cartao, codigo, nome, repositorioCartoes,<>) 
 
-fnAutorizacaoCredito(total, nome, cartao, codigo, repositorioCartoes) = let
-														cartaoBD = head(seq({cartao | (cartao, codigo, nome, credito) <- {head(repositorioCartoes)} }))	
-														codigoBD = head(seq({codigo | (cartao, codigo, nome, credito) <- {head(repositorioCartoes)} }))	
-														nomeBD = head(seq({nome | (cartao, codigo, nome, credito) <- {head(repositorioCartoes)} }))
-														credito = head(seq({credito | (cartao, codigo, nome, credito) <- {head(repositorioCartoes)} }))	
-													within
-														if 
-															cartao==cartaoBD and codigo==codigoBD and nome==nomeBD 
-														then
-															if 
-																credito >= total 
-															then
-																true
-															else
-																false
-														else
-															false
+AUTORIZACAOOPERADORAref(i, total, cartao, codigo, nome, repositorioCartoes, checked) = 	
+						let
+							cartaoBD = head(seq({cartao | (cartao, codigo, nome, credito) <- {head(repositorioCartoes)} }))	
+							codigoBD = head(seq({codigo | (cartao, codigo, nome, credito) <- {head(repositorioCartoes)} }))	
+							nomeBD = head(seq({nome | (cartao, codigo, nome, credito) <- {head(repositorioCartoes)} }))
+							credito = head(seq({credito | (cartao, codigo, nome, credito) <- {head(repositorioCartoes)} }))	
+						within
+							if 
+								--a chave primaria na busca
+								cartao==cartaoBD 
+							then
+								if
+									--os parâmetros informados para o cartão estão corretos
+									codigo==codigoBD and nome==nomeBD 
+								then
+									if 
+										--há limite de crédito disponível para o cliente
+										credito >= total 
+									then
+										-- autoriza e diminui limite do cliente
+										confirmaTransacaoCredito!i!true -> 
+											OPERADORACARTAOref(<(cartaoBD, codigoBD, nome, credito-total)>^tail(repositorioCartoes^checked))
+									else
+										-- não há limite disponível: não autoriza
+										confirmaTransacaoCredito!i!false -> OPERADORACARTAOref(repositorioCartoes^checked)
+								else
+									-- os parâmetros informados do cartão são inválidos, nega transação.
+									confirmaTransacaoCredito!i!false -> OPERADORACARTAOref(repositorioCartoes^checked)
+							else
+								-- não é o registro desejado, passa para o próximo.
+								AUTORIZACAOOPERADORAref(i, total, cartao, codigo, nome, tail(repositorioCartoes), <head(repositorioCartoes)>^checked)
+								
 
 
 assert LOJAVIRTUALref :[deadlock free[F]] -- PASSED
