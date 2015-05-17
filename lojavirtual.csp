@@ -141,8 +141,6 @@ DETALHEPRODUTO(i, item, c) =	consultaProdutoBD!i!item -> respostaProdutoBD!i?ite
 																mensagemEstoqueIndisponivel.i.item -> 
 																								NAVEGACAO(i, c)
 														)
-															[]
-														NAVEGACAO(i,c)
 
 -- Comprehension
 fnPreco(produtosLoja, item) = 	let 
@@ -426,8 +424,6 @@ DETALHEPRODUTOref(i, item, c) =	consultaProdutoBD!i!item -> respostaProdutoBD!i?
 																mensagemEstoqueIndisponivel.i.item -> 
 																								NAVEGACAOref(i, c)
 														)
-															[]
-														NAVEGACAOref(i,c)
 
 --i=id acesso; c=carrinho
 CARRINHOref(i, c) = 	if length(c) == 0 then
