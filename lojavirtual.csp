@@ -267,7 +267,7 @@ OPERADORACARTAO = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> evento
 
 assert LOJAVIRTUAL :[deadlock free[F]] -- PASSED
 assert LOJAVIRTUAL :[deterministic [F]] -- FAIL
-assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
+assert LOJAVIRTUAL :[divergence free [FD]] -- FAIL
 
 
 --TODO versão normal: 
