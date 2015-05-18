@@ -61,6 +61,7 @@ channel respostaProdutoBD:{1..2}.produtos.precosUnitariosPossiveis.{0..9}
 
 acessosSimultaneos = {1..2}
 channel depositoCliente:{333333, 444444}.{100}
+channel retornoLogin:{1..2}.Bool
 
 LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 
@@ -210,9 +211,10 @@ fnIdItens(c,idItens) = 	let
 -- i=id acesso; c=carrinho; n=tentativas de login.
 AUTENTICACAO(i, c, n) = autenticaUsuario.i?login.senha -> 
 													(
-														(loginOk.i -> PAGAMENTOref(i,c) )
+														(retornoLogin.i?true -> PAGAMENTOref(i,c) )
 											  				|~|
-														(loginFalhou.i -> 	if(n+1 < 2) then 
+														(retornoLogin.i?false -> 	
+																				if(n+1 < 2) then 
 																					AUTENTICACAO(i, c, n+1) 
 																				else
 																					ACESSOCLIENTE(i))
@@ -317,7 +319,7 @@ LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
 												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
 																	BDLOJAref(produtosLoja) )
-												[| {|autenticaUsuario, loginOk, loginFalhou|} |] 
+												[| {|autenticaUsuario, retornoLogin|} |] 
 																	BDLOJA2ref(seq(usuarios) ) )
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
 																	BANCOref(seq(repositorioContas) ) \ {|depositoCliente|} )
@@ -373,9 +375,9 @@ AUTENTICAUSUARIOBDref(i, nome, senha, usuarios, checked) =
 															within
 																if nome == nomeBD then
 																	if senha == senhaBD then
-																		loginOk.i -> BDLOJA2ref(usuarios^checked)
+																		retornoLogin.i!true-> BDLOJA2ref(usuarios^checked)
 																	else 
-																		loginFalhou.i -> BDLOJA2ref(usuarios^checked)
+																		retornoLogin.i!false -> BDLOJA2ref(usuarios^checked)
 																else 
 																	AUTENTICAUSUARIOBDref(i, nome, senha, tail(usuarios), <head(usuarios)>^checked)
 
@@ -431,12 +433,14 @@ CARRINHOref(i, c) = 	if length(c) == 0 then
 -- i=id acesso; c=carrinho; n=tentativas de login.
 AUTENTICACAOref(i, c, n) = autenticaUsuario.i?login.senha -> 
 													(
-														(loginOk.i -> PAGAMENTOref(i,c) )
-											  				[]
-														(loginFalhou.i -> 	if(n+1 < 2) then 
-																					AUTENTICACAOref(i, c, n+1) 
-																				else
-																					ACESSOCLIENTEref(i))
+														retornoLogin.i?resposta -> 
+															if resposta == true then
+																PAGAMENTOref(i,c) 
+															else
+											  				 	if(n+1 < 2) then 
+																	AUTENTICACAOref(i, c, n+1) 
+																else
+																	ACESSOCLIENTEref(i)
 													)
 
 PAGAMENTOref(i,c) = 	let 
@@ -568,8 +572,8 @@ assert LOJAVIRTUALref :[divergence free [FD]] -- PASSED
 assert LOJAVIRTUAL [T= LOJAVIRTUALref -- PASSED
 assert LOJAVIRTUALref [T= LOJAVIRTUAL -- FAIL
 
-assert LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUALref \{| autenticaUsuario, loginOk, loginFalhou |} -- FAIL
-assert LOJAVIRTUALref  \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} -- FAIL
+assert LOJAVIRTUAL [F= LOJAVIRTUALref -- FAIL
+assert LOJAVIRTUALref [F= LOJAVIRTUAL -- FAIL
 
 assert LOJAVIRTUAL [FD= LOJAVIRTUALref -- PASSED
 assert LOJAVIRTUALref [FD= LOJAVIRTUAL -- FAIL
