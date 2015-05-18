@@ -60,6 +60,7 @@ channel consultaProdutoBD:{1..2}.produtos
 channel respostaProdutoBD:{1..2}.produtos.precosUnitariosPossiveis.{0..9}
 
 acessosSimultaneos = {1..2}
+channel depositoCliente:{333333, 444444}.{100}
 
 LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 
@@ -68,7 +69,7 @@ LOJAVIRTUAL2(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i)
 												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
 																	BDLOJA(produtosLoja) )
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
-																	BANCO )
+																	BANCO \ {|depositoCliente|})
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
 																	OPERADORACARTAO ) 
 
@@ -242,14 +243,16 @@ PAGAMENTOCREDITO(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -
 															(confirmaTransacaoCredito!i?false -> PAGAMENTO(i,c))
 														)								
 
-BANCO = handshakeBanco?i?total ->
+BANCO = (handshakeBanco?i?total ->
 					transacaoDebitoOnline!i.total?conta?usuario?senha -> 
 														eventoInternoBanco!i -> 
 															(
 																(confirmaTransacaoDebito!i!true -> BANCO)
 																	|~|
 																(confirmaTransacaoDebito!i!false -> BANCO)
-															)
+															) )
+			[]
+		depositoCliente?conta?quantia -> BANCO
 
 OPERADORACARTAO = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
 															(
@@ -306,6 +309,7 @@ assert LOJAVIRTUAL :[divergence free [FD]] -- PASSED
 repositorioCartoes={(1111111, 11, Joao, 500), (2222222, 22, Maria, 100)}
 --(conta, usuario, senha, saldo em conta)
 repositorioContas={(333333, Joao, 321, 100), (444444, Maria, 654, 300)}
+repositorioContasRefill=repositorioContas
 
 LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 
@@ -316,7 +320,7 @@ LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIEN
 												[| {|autenticaUsuario, loginOk, loginFalhou|} |] 
 																	BDLOJA2ref(seq(usuarios) ) )
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
-																	BANCOref(seq(repositorioContas) ) )
+																	BANCOref(seq(repositorioContas) ) \ {|depositoCliente|} )
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
 																	OPERADORACARTAOref(seq(repositorioCartoes)) ) 
 
@@ -461,9 +465,32 @@ PAGAMENTOCREDITOref(i, c, total) = informaDadosCartao!i?nome?cartao?codigo ->
 																else
 																	 PAGAMENTOref(i,c)
 
-BANCOref(repositorioContas) = handshakeBanco?i?total ->
-					transacaoDebitoOnline!i.total?conta?usuario?senha ->
-													 eventoInternoBanco!i -> AUTORIZACAOBANCOref(i, total, conta, usuario, senha, repositorioContas, <>)
+BANCOref(repositorioContas) = 
+	if fnContasZeradas(repositorioContas) then
+		(handshakeBanco?i?total ->
+						transacaoDebitoOnline!i.total?conta?usuario?senha ->
+													eventoInternoBanco!i -> 
+														AUTORIZACAOBANCOref(i, total, conta, usuario, senha, repositorioContas, <>) )
+			[]
+		depositoCliente?conta?quantia -> BANCOref(seq(repositorioContasRefill))
+	else
+		(handshakeBanco?i?total ->
+				transacaoDebitoOnline!i.total?conta?usuario?senha ->
+											eventoInternoBanco!i -> 
+												AUTORIZACAOBANCOref(i, total, conta, usuario, senha, repositorioContas, <>) )
+
+fnContasZeradas(repositorioContas) = 	
+								if length(repositorioContas)>0 then
+									let
+										saldo = head(seq({saldo | (conta, usuario, senha, saldo) <- {head(repositorioContas)} }))	
+									within
+										if saldo > 0 then
+											false
+										else
+											fnContasZeradas(tail(repositorioContas))
+								else
+									true
+
 
 AUTORIZACAOBANCOref(i, total,conta,usuario,senha,repositorioContas, checked) =  
 									let 
@@ -535,11 +562,14 @@ AUTORIZACAOOPERADORAref(i, total, cartao, codigo, nome, repositorioCartoes, chec
 
 
 assert LOJAVIRTUALref :[deadlock free[F]] -- PASSED
-assert LOJAVIRTUALref :[deterministic [F]] -- FAIL
+assert LOJAVIRTUALref :[deterministic [F]] -- PASSED
 assert LOJAVIRTUALref :[divergence free [FD]] -- PASSED
 
 assert LOJAVIRTUAL [T= LOJAVIRTUALref -- PASSED
 assert LOJAVIRTUALref [T= LOJAVIRTUAL -- FAIL
 
-assert LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUALref \{| autenticaUsuario, loginOk, loginFalhou |} -- PASSED
-assert LOJAVIRTUALref  \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} -- PASSED
+assert LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUALref \{| autenticaUsuario, loginOk, loginFalhou |} -- FAIL
+assert LOJAVIRTUALref  \{| autenticaUsuario, loginOk, loginFalhou |} [F= LOJAVIRTUAL \{| autenticaUsuario, loginOk, loginFalhou |} -- FAIL
+
+assert LOJAVIRTUAL [FD= LOJAVIRTUALref -- PASSED
+assert LOJAVIRTUALref [FD= LOJAVIRTUAL -- FAIL
