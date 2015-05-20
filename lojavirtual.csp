@@ -45,6 +45,7 @@ channel respostaEstoqueBD:{1..2}.Bool.precosUnitariosPossiveis
 channel consultaProdutoBD:{1..2}.produtos
 channel respostaProdutoBD:{1..2}.produtos.precosUnitariosPossiveis.{0..9}
 channel depositoCliente:{333333, 444444}.{100}
+channel recebeDeposito
 
 --Processo principal
 --Entrelacamento de acessos + composicoes generalizadas
@@ -54,7 +55,7 @@ LOJAVIRTUAL = 	( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
 																	BDLOJA(seq(produtosBD)) )
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
 																	--hiding de depositoCliente para causar divergência
-																	BANCO \{|depositoCliente|})
+																	BANCO \{|recebeDeposito, depositoCliente|})
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
 																	OPERADORACARTAO ) 
 
@@ -252,9 +253,10 @@ BANCO = (handshakeBanco?i?total ->
 																	|~|
 																(confirmaTransacaoDebito!i!false -> BANCO)
 															) )
-			|~|
+			[]
 		--Aqui a divergência (esta sob hiding na composicao): o cliente pode depositar aleatoriamente.
-		depositoCliente?conta?quantia -> BANCO
+		recebeDeposito -> 	
+				|~| evt:{|depositoCliente|} @ evt -> BANCO
 
 OPERADORACARTAO = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
 															(
@@ -306,7 +308,7 @@ LOJAVIRTUALref =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
 															autenticaUsuario, retornoLogin|} |]
 																	BDLOJAref(seq(produtosBD), seq(usuarios)) )
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
-																	BANCOref(seq(repositorioContas) ) \ {|depositoCliente|} )
+																	BANCOref(seq(repositorioContas) ) \ {|recebeDeposito, depositoCliente|} )
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
 																	OPERADORACARTAOref(seq(repositorioCartoes)) ) 
 
@@ -466,10 +468,11 @@ BANCOref(repositorioContas) =
 						transacaoDebitoOnline!i.total?conta?usuario?senha ->
 													eventoInternoBanco!i -> 
 														AUTORIZACAOBANCOref(i, total, conta, usuario, senha, repositorioContas, <>) )
-			|~|
+			[]
 		--Aqui esta a divergencia (depositoCliente esta sob hiding na composicao paralela com LOJAVIRTUAL)
 		--Tambem foi usada uma simplificacao: qualquer conta/quantia das possiveis gera um refill para o status inicial das contas.
-		depositoCliente?conta?quantia -> BANCOref(seq(repositorioContasRefill))
+		recebeDeposito -> 
+				|~| evt:{|depositoCliente|} @ evt -> BANCOref(seq(repositorioContasRefill))
 	else
 		(handshakeBanco?i?total ->
 				transacaoDebitoOnline!i.total?conta?usuario?senha ->
