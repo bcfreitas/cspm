@@ -2,75 +2,63 @@
 
 datatype produto = Smartphone | TV
 datatype pessoas = Joao | Maria
+
+acessosSimultaneos = {1..2}
 produtos = {Smartphone, TV}
 produtosBD = {(Smartphone, 100, 2), (TV, 200, 1)}
+usuarios = {(Joao, 123), (Maria, 345)}
+nomesPossiveis = {Joao, Maria}
 
 --os conjuntos abaixo foram criados para melhorar o desempenho do FDR
 totaisPossiveis = {100,200,300,400}
 precosUnitariosPossiveis = {100,200}
 
-usuarios = {(Joao, 123), (Maria, 345)}
-nomesPossiveis = {Joao, Maria}
-
---{450, 870, 900, 1320, 1740}
---O primeiro parâmetro de todos os canais é a identificação do acesso: 1 ou 2.
+--O primeiro parâmetro de todos os canais é a identificação do acesso: 1 ou 2, para não nos perdermos no Probe! :)
 channel autenticaUsuario:{1..2}.{Joao, Maria}.{123, 345}
+channel retornoLogin:{1..2}.Bool
 channel adicionaCarrinho:{1..2}.produtos
 channel acessaProduto:{1..2}.produtos
-channel loginFalhou:{1..2}
 channel acessoCliente:{1..2}
 channel pesquisaProduto:{1..2}
-channel confereItens:{1..2}
-channel finalizaCompra:{1..2}
 channel continuarComprando:{1..2}
-channel confirmaEndereco:{1.2}
 channel escolherFormaPagamento:{1..2}.totaisPossiveis
-channel confirmaPagamento:{1..2}
-channel calcularFrete:{1..2}
 channel concluirCompra:{1..2}.totaisPossiveis
-channel loginOk:{1..2} 
-channel cadastrarNovoUsuario:{1..2}
-channel exibeInfoProduto:{1..2}.{1..10}
 channel removerItem:{1..2}.produtos
 channel carrinhoVazio:{1..2}
-channel pagamentoBoleto:{1..2}
 channel pagamentoDebitoOnline:{1..2}.totaisPossiveis
-channel transacaoDebitoOnline:{1..2}.totaisPossiveis.{333333,444444}.nomesPossiveis.{321,654}
-channel pagamentoCartaoCredito:{1..2}.totaisPossiveis
 channel confirmaTransacaoCredito:{1..2}.Bool 
-channel negaTransacaoCredito:{1..2}
 channel confirmaTransacaoDebito:{1..2}.Bool
-channel negaTransacaoDebito:{1..2}
-channel pagamentoFalha:{1..2}
 channel enviaProdutos:{1..2}
 channel handshakeBanco:{1..2}.totaisPossiveis
 channel aguardaResposta:{1..2}
 channel transacaoCredito:{1..2}
 channel handshakeOperadora:{1..2}.totaisPossiveis.{Joao, Maria}.{1111111,2222222}.{11,22}
+channel transacaoDebitoOnline:{1..2}.totaisPossiveis.{333333,444444}.nomesPossiveis.{321,654}
+channel pagamentoCartaoCredito:{1..2}.totaisPossiveis
 channel informaDadosCartao:{1..2}.{Joao, Maria}.{1111111,2222222}.{11,22}
 channel eventoInternoOperadora:{1..2}
 channel eventoInternoBanco:{1..2}
-channel consultaEstoque:{1..2}.produtos
 channel separaEstoque:{1..2}.produtos
 channel reverteEstoque:{1..2}.produtos
 channel mensagemEstoqueIndisponivel:{1..2}.produtos
 channel respostaEstoqueBD:{1..2}.Bool.precosUnitariosPossiveis
-channel BDesperaConfirmacao:{1..2}
 channel consultaProdutoBD:{1..2}.produtos
 channel respostaProdutoBD:{1..2}.produtos.precosUnitariosPossiveis.{0..9}
-
-acessosSimultaneos = {1..2}
 channel depositoCliente:{333333, 444444}.{100}
-channel retornoLogin:{1..2}.Bool
 
+--Processo principal, chama outro processo auxiliar passando como parametro o array de produtos 
+--(só pra evitar ter que colocar parâmetro no FDR... basta chamar LOJAVIRTUAL)
 LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 
--- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
-LOJAVIRTUAL2(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
+-- Entrelaçamento de acessos + composições generalizadas
+LOJAVIRTUAL2(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
 												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
 																	BDLOJA(produtosLoja) )
+												[| {|autenticaUsuario, retornoLogin|} |] 
+																	BDLOJA2)
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
-																	BANCO \ {|depositoCliente|})
+																	--hiding de depositoCliente para causar divergência
+																	BANCO \{|depositoCliente|})
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
 																	OPERADORACARTAO ) 
 
@@ -79,6 +67,10 @@ BDLOJA(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABD(i, produtosLoja,
 						(separaEstoque?i?item -> SEPARAESTOQUEBD(i, produtosLoja, item, <>))
 							[]
 						(reverteEstoque?i?item -> REVERTEESTOQUEBD(i, produtosLoja, item, <>))
+
+BDLOJA2 = autenticaUsuario?i?login?senha -> ((retornoLogin!i.true -> BDLOJA2)
+											|~|
+											(retornoLogin!i.false -> BDLOJA2))
 
 
 CONSULTABD(i, produtosLoja, item) = 	let 
@@ -209,16 +201,15 @@ fnIdItens(c,idItens) = 	let
 								set(idItens)
 
 -- i=id acesso; c=carrinho; n=tentativas de login.
-AUTENTICACAO(i, c, n) = autenticaUsuario.i?login.senha -> 
-													(
-														(retornoLogin.i?true -> PAGAMENTOref(i,c) )
-											  				|~|
-														(retornoLogin.i?false -> 	
-																				if(n+1 < 2) then 
-																					AUTENTICACAO(i, c, n+1) 
-																				else
-																					ACESSOCLIENTE(i))
-													)
+AUTENTICACAO(i, c, n) = autenticaUsuario!i?login.senha ->
+														retornoLogin.i?resposta ->
+															if resposta == true then
+																PAGAMENTO(i,c)
+															else 
+																if(n+1 < 2) then 
+																	AUTENTICACAO(i, c, n+1) 
+																else
+																	ACESSOCLIENTE(i)
 
 PAGAMENTO(i,c) = 	let 
 						total = fnTotalCarrinho(c,0) 
@@ -230,20 +221,21 @@ PAGAMENTO(i,c) = 	let
 
 --eventos sincronizados com BANCO (ver composição paralela)
 PAGAMENTODEBITOONLINE(i,c,total) = handshakeBanco!i.total -> aguardaResposta!i ->
-																	( 
-																		(confirmaTransacaoDebito!i?true -> enviaProdutos.i -> ACESSOCLIENTE(i))
-																			|~|
-																		(confirmaTransacaoDebito!i?false -> PAGAMENTO(i,c))
-																	)
+																		confirmaTransacaoDebito!i?resposta -> 
+																			if resposta == true then
+																				enviaProdutos.i -> ACESSOCLIENTE(i)
+																			else
+																				PAGAMENTO(i,c)
 
 --eventos sincronizados com OPERADORACARTAO (ver composição paralela)																
 PAGAMENTOCREDITO(i, c, total) = informaDadosCartao!i?nomegrafado?cartao?codigo -> 
-									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> aguardaResposta.i ->
-														(
-															(confirmaTransacaoCredito!i?true -> enviaProdutos!i -> ACESSOCLIENTE(i))
-																|~|
-															(confirmaTransacaoCredito!i?false -> PAGAMENTO(i,c))
-														)								
+									handshakeOperadora.i.total.nomegrafado.cartao.codigo -> 
+																			aguardaResposta.i ->
+																					confirmaTransacaoCredito!i?resposta -> 
+																						if resposta == true then
+																							enviaProdutos!i -> ACESSOCLIENTE(i)
+																						else 
+																							PAGAMENTO(i,c)
 
 BANCO = (handshakeBanco?i?total ->
 					transacaoDebitoOnline!i.total?conta?usuario?senha -> 
