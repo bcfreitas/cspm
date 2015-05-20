@@ -51,11 +51,10 @@ channel depositoCliente:{333333, 444444}.{100}
 LOJAVIRTUAL = LOJAVIRTUAL2(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composições generalizadas
-LOJAVIRTUAL2(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
-												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
+LOJAVIRTUAL2(produtosLoja) = 	( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTE(i))
+												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque,
+																autenticaUsuario, retornoLogin|} |]
 																	BDLOJA(produtosLoja) )
-												[| {|autenticaUsuario, retornoLogin|} |] 
-																	BDLOJA2)
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
 																	--hiding de depositoCliente para causar divergência
 																	BANCO \{|depositoCliente|})
@@ -67,10 +66,11 @@ BDLOJA(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABD(i, produtosLoja,
 						(separaEstoque?i?item -> SEPARAESTOQUEBD(i, produtosLoja, item, <>))
 							[]
 						(reverteEstoque?i?item -> REVERTEESTOQUEBD(i, produtosLoja, item, <>))
-
-BDLOJA2 = autenticaUsuario?i?login?senha -> ((retornoLogin!i.true -> BDLOJA2)
-											|~|
-											(retornoLogin!i.false -> BDLOJA2))
+							[]
+						(autenticaUsuario?i?login?senha -> 
+											((retornoLogin!i.true -> BDLOJA(produtosLoja))
+												|~|
+											(retornoLogin!i.false -> BDLOJA(produtosLoja))))
 
 
 CONSULTABD(i, produtosLoja, item) = 	let 
@@ -308,70 +308,74 @@ repositorioContasRefill=repositorioContas
 LOJAVIRTUALref = LOJAVIRTUAL2ref(seq(produtosBD))
 
 -- Entrelaçamento de acessos + composição generalizada com Banco de Dados da loja
-LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
-												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque|} |]
-																	BDLOJAref(produtosLoja) )
-												[| {|autenticaUsuario, retornoLogin|} |] 
-																	BDLOJA2ref(seq(usuarios) ) )
+LOJAVIRTUAL2ref(produtosLoja) =  ( ( ( (||| i:acessosSimultaneos @ ACESSOCLIENTEref(i))
+												[| {|separaEstoque, respostaEstoqueBD, consultaProdutoBD, respostaProdutoBD, reverteEstoque,
+															autenticaUsuario, retornoLogin|} |]
+																	BDLOJAref(produtosLoja, seq(usuarios)) )
 												[| {|handshakeBanco, confirmaTransacaoDebito|} |] 
 																	BANCOref(seq(repositorioContas) ) \ {|depositoCliente|} )
 												[| {|handshakeOperadora, transacaoCredito, confirmaTransacaoCredito|} |] 
 																	OPERADORACARTAOref(seq(repositorioCartoes)) ) 
 
 
-BDLOJAref(produtosLoja) = 	(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item))
+BDLOJAref(produtosLoja, usuarios) = 	
+							(consultaProdutoBD?i?item -> CONSULTABDref(i, produtosLoja, item, usuarios))
 								[]
-							(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>))
+							(separaEstoque?i?item -> SEPARAESTOQUEBDref(i, produtosLoja, item, <>, usuarios))
 								[]
-							(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>))
+							(reverteEstoque?i?item -> REVERTEESTOQUEBDref(i, produtosLoja, item, <>, usuarios))
+								[]
+							(autenticaUsuario?i?nome?senha -> AUTENTICAUSUARIOBDref(i, nome, senha, usuarios, <>, produtosLoja))
 
-BDLOJA2ref(usuarios) = autenticaUsuario?i?nome?senha -> AUTENTICAUSUARIOBDref(i, nome, senha, usuarios, <>)
 
-
-CONSULTABDref(i, produtosLoja, item) = 	let 
+CONSULTABDref(i, produtosLoja, item, usuarios) = 	
+									let 
 										preco = fnPreco(produtosLoja, item)
 	 									estoque = fnEstoque(produtosLoja, item) 
 	 								within
-	 									respostaProdutoBD!i.item.preco.estoque -> BDLOJAref(produtosLoja)
+	 									respostaProdutoBD!i.item.preco.estoque -> BDLOJAref(produtosLoja, usuarios)
 
-SEPARAESTOQUEBDref(i, produtosLoja, item, checked) = 	let
+SEPARAESTOQUEBDref(i, produtosLoja, item, checked, usuarios) = 	
+													let
 														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
 														preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) )
 														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
 													within
 														if nome == item then
 															if estoque > 0 then
-																respostaEstoqueBD!i.true.preco -> BDLOJAref(<(nome,preco,estoque-1)>^(tail(produtosLoja))^checked)
+																respostaEstoqueBD!i.true.preco -> 
+																	BDLOJAref(<(nome,preco,estoque-1)>^(tail(produtosLoja))^checked, usuarios)
 															else
-																respostaEstoqueBD!i.false.preco -> BDLOJAref(produtosLoja^checked)
+																respostaEstoqueBD!i.false.preco -> BDLOJAref(produtosLoja^checked, usuarios)
 														else
-															SEPARAESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+															SEPARAESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>, usuarios)
 
-REVERTEESTOQUEBDref(i, produtosLoja, item, checked) = 	let
+REVERTEESTOQUEBDref(i, produtosLoja, item, checked, usuarios) = 	
+													let
 														nome = head( seq({nome | (nome, preco, estoque) <- {head(produtosLoja)} }) )
 														preco = head( seq({preco | (nome, preco, estoque) <- {head(produtosLoja)} }) )
 														estoque = head( seq({estoque | (nome, preco, estoque) <- {head(produtosLoja)} }) )
 													within
 														if nome == item then
 															if estoque < 9 then
-																BDLOJAref(<(nome,preco,estoque+1)>^(tail(produtosLoja))^checked)
+																BDLOJAref(<(nome,preco,estoque+1)>^(tail(produtosLoja))^checked, usuarios)
 															else
-																BDLOJAref(<(nome,preco,estoque)>^(tail(produtosLoja))^checked)
+																BDLOJAref(<(nome,preco,estoque)>^(tail(produtosLoja))^checked, usuarios)
 														else
-															REVERTEESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>)
+															REVERTEESTOQUEBDref(i, tail(produtosLoja), item, checked^<head(produtosLoja)>, usuarios)
 
-AUTENTICAUSUARIOBDref(i, nome, senha, usuarios, checked) = 	
+AUTENTICAUSUARIOBDref(i, nome, senha, usuarios, checked, produtosLoja) = 	
 															let
 																nomeBD = head( seq({nome | (nome, senha) <- {head(usuarios)} }) )
 																senhaBD = head( seq({senha | (nome, senha) <- {head(usuarios)} }) )
 															within
 																if nome == nomeBD then
 																	if senha == senhaBD then
-																		retornoLogin.i!true-> BDLOJA2ref(usuarios^checked)
+																		retornoLogin.i!true-> BDLOJAref(produtosLoja, usuarios^checked)
 																	else 
-																		retornoLogin.i!false -> BDLOJA2ref(usuarios^checked)
+																		retornoLogin.i!false -> BDLOJAref(produtosLoja, usuarios^checked)
 																else 
-																	AUTENTICAUSUARIOBDref(i, nome, senha, tail(usuarios), <head(usuarios)>^checked)
+																	AUTENTICAUSUARIOBDref(i, nome, senha, tail(usuarios), <head(usuarios)>^checked, produtosLoja)
 
 --i=id acesso
 ACESSOCLIENTEref(i) = acessoCliente.i -> NAVEGACAOref(i, <>)
