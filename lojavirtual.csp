@@ -253,10 +253,10 @@ BANCO = (handshakeBanco?i?total ->
 																	|~|
 																(confirmaTransacaoDebito!i!false -> BANCO)
 															) )
-			[]
-		--Aqui a divergência (esta sob hiding na composicao): o cliente pode depositar aleatoriamente.
-		recebeDeposito -> 	
-				|~| evt:{|depositoCliente|} @ evt -> BANCO
+		-- 	[]
+		-- --Aqui a divergência (esta sob hiding na composicao): o cliente pode depositar aleatoriamente.
+		-- recebeDeposito -> 	
+		-- 		|~| evt:{|depositoCliente|} @ evt -> BANCO
 
 OPERADORACARTAO = handshakeOperadora?i?total?nomegrafado?cartao?codigo -> eventoInternoOperadora!i ->
 															(
@@ -462,18 +462,18 @@ PAGAMENTOCREDITOref(i, c, total) = informaDadosCartao!i?nome?cartao?codigo ->
 																	 PAGAMENTOref(i,c)
 
 BANCOref(repositorioContas) = 
-	--A divergencia foi eliminada com esta condicao: a opcao interna de depositoCliente so eh dada quando todas as contas zeram
-	if fnContasZeradas(repositorioContas) then
-		(handshakeBanco?i?total ->
-						transacaoDebitoOnline!i.total?conta?usuario?senha ->
-													eventoInternoBanco!i -> 
-														AUTORIZACAOBANCOref(i, total, conta, usuario, senha, repositorioContas, <>) )
-			[]
-		--Aqui esta a divergencia (depositoCliente esta sob hiding na composicao paralela com LOJAVIRTUAL)
-		--Tambem foi usada uma simplificacao: qualquer conta/quantia das possiveis gera um refill para o status inicial das contas.
-		recebeDeposito -> 
-				|~| evt:{|depositoCliente|} @ evt -> BANCOref(seq(repositorioContasRefill))
-	else
+	-- --A divergencia foi eliminada com esta condicao: a opcao interna de depositoCliente so eh dada quando todas as contas zeram
+	-- if fnContasZeradas(repositorioContas) then
+	-- 	(handshakeBanco?i?total ->
+	-- 					transacaoDebitoOnline!i.total?conta?usuario?senha ->
+	-- 												eventoInternoBanco!i -> 
+	-- 													AUTORIZACAOBANCOref(i, total, conta, usuario, senha, repositorioContas, <>) )
+	-- 		[]
+	-- 	--Aqui esta a divergencia (depositoCliente esta sob hiding na composicao paralela com LOJAVIRTUAL)
+	-- 	--Tambem foi usada uma simplificacao: qualquer conta/quantia das possiveis gera um refill para o status inicial das contas.
+	-- 	recebeDeposito -> 
+	-- 			|~| evt:{|depositoCliente|} @ evt -> BANCOref(seq(repositorioContasRefill))
+	-- else
 		(handshakeBanco?i?total ->
 				transacaoDebitoOnline!i.total?conta?usuario?senha ->
 											eventoInternoBanco!i -> 
